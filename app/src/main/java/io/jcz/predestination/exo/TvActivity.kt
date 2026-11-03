@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Toast
@@ -56,6 +57,9 @@ internal class TvActivity : Activity(), Renderer {
     private var metadata = ""
     private var volume = 100
     private var muted = false
+    private val audioGain = AudioGain()
+    private lateinit var gainButton: Button
+    private var gainDialog: AlertDialog? = null
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -70,6 +74,14 @@ internal class TvActivity : Activity(), Renderer {
         if (apkUpdate.pending.lastModified() < installedAt) apkUpdate.pending.delete()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         video = PlayerView(this)
+        gainButton = Button(this).apply {
+            text = "声音增益：0 dB"
+            visibility = View.GONE
+            setOnClickListener { showGainDialog() }
+        }
+        video.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+            gainButton.visibility = if (uri.isNotEmpty()) visibility else View.GONE
+        })
         status = TextView(this).apply {
             gravity = Gravity.CENTER
             textSize = 22f
@@ -91,12 +103,24 @@ internal class TvActivity : Activity(), Renderer {
             addView(video, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+            addView(gainButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
         })
     }
 
     override fun onStart() {
         super.onStart()
-        val renderers = NextRenderersFactory(this)
+        setAudioGain(0)
+        val renderers = object : NextRenderersFactory(this@TvActivity) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioOutputPlaybackParams: Boolean
+            ): androidx.media3.exoplayer.audio.AudioSink =
+                androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(false)
+                    .setAudioProcessors(arrayOf(audioGain))
+                    .build()
+        }
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         val subtitleRenderers = RenderersFactory { handler, videoEvents, audioEvents, textOutput, metadataOutput ->
             renderers.createRenderers(handler, videoEvents, audioEvents, textOutput, metadataOutput)
@@ -155,6 +179,12 @@ internal class TvActivity : Activity(), Renderer {
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     AppLog.record("TvExoPlayback", "Playback error: ${error.errorCodeName}")
+                    generateSequence<Throwable>(error) { it.cause }.take(8).forEach { cause ->
+                        AppLog.record("TvExoPlayback", "${cause.javaClass.simpleName}: ${cause.message}")
+                        cause.stackTrace.take(6).forEach { frame ->
+                            AppLog.record("TvExoPlayback", "  at $frame")
+                        }
+                    }
                 }
 
                 override fun onEvents(player: Player, events: Player.Events) = updateStatus()
@@ -167,6 +197,8 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        gainDialog?.dismiss()
+        gainDialog = null
         main.removeCallbacks(refresh)
         adminDialog?.dismiss()
         adminDialog = null
@@ -182,11 +214,34 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_MENU && uri.isNotEmpty()) {
+            showGainDialog()
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP && uri.isNotEmpty()) {
             stopPlayback()
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    private fun setAudioGain(db: Int) {
+        audioGain.setGain(db)
+        gainButton.text = "声音增益：${if (db == 0) "0" else "+$db"} dB"
+        AppLog.record("TvExoAudio", "Audio gain=${db}dB")
+    }
+
+    private fun showGainDialog() {
+        if (gainDialog?.isShowing == true) return
+        val values = (0..18 step 3).toList()
+        gainDialog = AlertDialog.Builder(this)
+            .setTitle("声音增益（新视频自动归零）")
+            .setSingleChoiceItems(values.map { if (it == 0) "0 dB（原音量）" else "+$it dB" }
+                .toTypedArray(), values.indexOf(audioGain.decibels)) { _, index ->
+                setAudioGain(values[index])
+            }
+            .setPositiveButton("完成", null)
+            .show()
     }
 
     private fun stopPlayback() {
@@ -282,6 +337,7 @@ internal class TvActivity : Activity(), Renderer {
         val waiting = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
         status.visibility = if (waiting) View.VISIBLE else View.GONE
         video.useController = !waiting
+        if (waiting) gainButton.visibility = View.GONE
         if (!waiting) return
         val error = player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",
@@ -314,6 +370,9 @@ internal class TvActivity : Activity(), Renderer {
             "SetAVTransportURI" -> {
                 val next = args.getValue("CurrentURI")
                 if (next.isNotEmpty()) Protocol.mediaUri(next)
+                gainDialog?.dismiss()
+                gainDialog = null
+                setAudioGain(0)
                 uri = next
                 metadata = args.getValue("CurrentURIMetaData")
                 stopPlayback()
