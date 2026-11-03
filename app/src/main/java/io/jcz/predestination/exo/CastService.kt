@@ -93,7 +93,7 @@ internal class CastService : Service(), Renderer {
             val id = prefs.getString("uuid", null) ?: "uuid:${UUID.randomUUID()}".also {
                 prefs.edit().putString("uuid", it).apply()
             }
-            val page = AdminPage(ApkUpdate(applicationContext))
+            val page = AdminPage(getSharedPreferences("admin", MODE_PRIVATE), ApkUpdate(applicationContext))
             receiver = DlnaReceiver(ip, id, "Predestination TV Exo · ${Build.MODEL}", this, lan.first, page)
             admin = page
             AppLog.record("TvExoReceiver", "Listening at ${receiver?.baseUrl}")
@@ -170,4 +170,3 @@ internal class CastService : Service(), Renderer {
         }
     }
 }
-

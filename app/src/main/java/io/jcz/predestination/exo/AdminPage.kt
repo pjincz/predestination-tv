@@ -1,20 +1,21 @@
 package io.jcz.predestination.exo
 
+import android.content.SharedPreferences
 import android.os.SystemClock
+import java.security.MessageDigest
 import android.util.Base64
 import java.security.SecureRandom
 
-private const val SESSION_SECONDS = 24 * 60 * 60
+private const val SESSION_SECONDS = 8 * 60 * 60
 private const val APPROVAL_SECONDS = 120
 
-internal class AdminPage(private val update: ApkUpdate) {
+internal class AdminPage(private val preferences: SharedPreferences, private val update: ApkUpdate) {
     internal data class Approval(val id: String, val code: String, val peer: String)
     private data class Pending(val approval: Approval, val expires: Long, var approved: Boolean? = null)
 
     private val random = SecureRandom()
     private var pending: Pending? = null
-    private var session = ""
-    private var sessionExpires = 0L
+
 
     private fun token() = Base64.encodeToString(ByteArray(32).also(random::nextBytes),
         Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE)
@@ -23,8 +24,14 @@ internal class AdminPage(private val update: ApkUpdate) {
         request.headers["cookie"].orEmpty().split(';')
             .map { it.trim() }.firstOrNull { it.startsWith("$name=") }?.substringAfter('=')
 
-    private fun authenticated(request: HttpRequest, now: Long) =
-        session.isNotEmpty() && now < sessionExpires && cookie(request, "admin_session") == session
+    private fun sessionDigest(token: String) = Base64.encodeToString(
+        MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
+
+    private fun authenticated(request: HttpRequest): Boolean {
+        val token = cookie(request, "admin_session") ?: return false
+        return System.currentTimeMillis() < preferences.getLong("sessionExpires", 0L) &&
+            sessionDigest(token) == preferences.getString("sessionDigest", null)
+    }
 
     @Synchronized
     fun awaitingApproval(): Approval? = pending?.takeIf {
@@ -40,7 +47,7 @@ internal class AdminPage(private val update: ApkUpdate) {
         if (request.method != "POST") return HttpResponse(405)
         val authorized = synchronized(this) {
             request.headers["host"] == baseUrl.removePrefix("http://") &&
-                request.headers["origin"] == baseUrl && authenticated(request, SystemClock.elapsedRealtime())
+                request.headers["origin"] == baseUrl && authenticated(request)
         }
         if (!authorized) return HttpResponse(403, "请重新登录")
         if (request.headers["content-type"] != "application/vnd.android.package-archive")
@@ -58,7 +65,7 @@ internal class AdminPage(private val update: ApkUpdate) {
         if (request.headers["sec-fetch-site"] == "cross-site") return page(403, "请直接打开管理员地址")
         val now = SystemClock.elapsedRealtime()
         if (request.path == "/admin/logs") {
-            if (!authenticated(request, now)) return page(403, "请先在电视上授权")
+            if (!authenticated(request)) return page(403, "请先在电视上授权")
             return HttpResponse(body = AppLog.read(), headers = mapOf(
                 "Content-Type" to "text/plain; charset=utf-8",
                 "Cache-Control" to "no-store",
@@ -66,7 +73,7 @@ internal class AdminPage(private val update: ApkUpdate) {
                 "Content-Security-Policy" to "default-src 'none'; frame-ancestors 'none'"
             ))
         }
-        if (authenticated(request, now)) return dashboard()
+        if (authenticated(request)) return dashboard()
 
         val claim = cookie(request, "admin_approval")
         val current = pending
@@ -76,9 +83,13 @@ internal class AdminPage(private val update: ApkUpdate) {
                 return page(403, "授权已拒绝或过期").withCookie("admin_approval", "", 0)
             }
             if (current.approved == true) {
+                val session = token()
+                val expires = System.currentTimeMillis() + SESSION_SECONDS * 1000L
+                if (!preferences.edit().putString("sessionDigest", sessionDigest(session))
+                        .putLong("sessionExpires", expires).commit()) {
+                    return page(503, "无法保存授权，请重试")
+                }
                 pending = null
-                session = token()
-                sessionExpires = now + SESSION_SECONDS * 1000L
                 return dashboard().withCookie("admin_session", session, SESSION_SECONDS)
             }
             return waiting(current.approval)
@@ -143,4 +154,3 @@ internal class AdminPage(private val update: ApkUpdate) {
         )
     )
 }
-
