@@ -126,7 +126,7 @@ internal class DlnaReceiver(
     private fun request(request: HttpRequest): HttpResponse {
         Log.d("TvCast", "${request.peer.hostAddress} ${request.method} ${request.path.substringBefore('?')}")
         if (closed) return HttpResponse(503)
-        if (request.path == "/admin") return admin.handle(request, baseUrl)
+        if (request.path == "/admin" || request.path == "/admin/logs") return admin.handle(request, baseUrl)
         if (request.method == "GET" && request.path == "/description.xml")
             return HttpResponse(body = description())
         val parts = request.path.trim('/').split('/')
@@ -143,11 +143,18 @@ internal class DlnaReceiver(
                             error.stackTrace.take(5).joinToString(" <- "))
                         throw UpnpError(402, "Invalid Args")
                     }
-                    // Never log media URLs or metadata: they can contain signed credentials.
                     Log.i("TvCast", "SOAP ${action.name} received")
                     android.util.Log.d("DLNA", "${request.peer.hostAddress} ${action.name}")
                     Protocol.validate(service, action)
-                    HttpResponse(body = Protocol.response(service, action.name, renderer.action(service, action)))
+                    val result = renderer.action(service, action)
+                    if (service == AV && action.name == "SetAVTransportURI") {
+                        val uri = action.args.getValue("CurrentURI")
+                        if (uri.isNotEmpty()) {
+                            val safeUrl = uri.substringBefore('?').substringBefore('#')
+                            AppLog.record("TvExoCast", "Sender=${request.peer.hostAddress} url=$safeUrl")
+                        }
+                    }
+                    HttpResponse(body = Protocol.response(service, action.name, result))
                 } catch (error: UpnpError) {
                     android.util.Log.d("DLNA", "Rejected ${error.code}: ${error.message}")
                     Log.w("TvCast", "SOAP rejected: ${error.message}")
@@ -234,3 +241,5 @@ internal class DlnaReceiver(
         timer.shutdownNow()
     }
 }
+
+

@@ -96,7 +96,7 @@ internal class CastService : Service(), Renderer {
             val page = AdminPage(ApkUpdate(applicationContext))
             receiver = DlnaReceiver(ip, id, "Predestination TV Exo · ${Build.MODEL}", this, lan.first, page)
             admin = page
-            android.util.Log.d("receiver", "Listening at ${ip.hostAddress}")
+            AppLog.record("TvExoReceiver", "Listening at ${receiver?.baseUrl}")
             address = ip.hostAddress
             status = "等待投屏 · $address\n管理员页面 · ${receiver?.baseUrl}/admin"
         } catch (error: Exception) {
@@ -170,3 +170,4 @@ internal class CastService : Service(), Renderer {
         }
     }
 }
+

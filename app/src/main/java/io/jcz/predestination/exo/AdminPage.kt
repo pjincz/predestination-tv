@@ -45,7 +45,9 @@ internal class AdminPage(private val update: ApkUpdate) {
         if (!authorized) return HttpResponse(403, "请重新登录")
         if (request.headers["content-type"] != "application/vnd.android.package-archive")
             return HttpResponse(400, "请选择 APK 文件")
+        AppLog.record("TvExoUpdate", "Upload started: $size bytes")
         val result = update.receive(input, size)
+        AppLog.record("TvExoUpdate", "Upload result: ${result.status}")
         return result.copy(headers = mapOf("Content-Type" to "text/plain; charset=utf-8", "Cache-Control" to "no-store"))
     }
 
@@ -55,6 +57,15 @@ internal class AdminPage(private val update: ApkUpdate) {
         if (request.method != "GET") return page(405, "请求方法不支持")
         if (request.headers["sec-fetch-site"] == "cross-site") return page(403, "请直接打开管理员地址")
         val now = SystemClock.elapsedRealtime()
+        if (request.path == "/admin/logs") {
+            if (!authenticated(request, now)) return page(403, "请先在电视上授权")
+            return HttpResponse(body = AppLog.read(), headers = mapOf(
+                "Content-Type" to "text/plain; charset=utf-8",
+                "Cache-Control" to "no-store",
+                "X-Content-Type-Options" to "nosniff",
+                "Content-Security-Policy" to "default-src 'none'; frame-ancestors 'none'"
+            ))
+        }
         if (authenticated(request, now)) return dashboard()
 
         val claim = cookie(request, "admin_approval")
@@ -90,6 +101,7 @@ internal class AdminPage(private val update: ApkUpdate) {
         copy(headers = headers + ("Set-Cookie" to "$name=$value; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=$seconds"))
 
     private fun dashboard() = page(200, "管理员页面", """
+            <p><a href="/admin/logs">查看运行日志</a></p>
             <h2>上传 APK 更新</h2>
             <input id="apk" type="file" accept=".apk">
             <button id="upload" type="button">上传</button>
@@ -131,3 +143,4 @@ internal class AdminPage(private val update: ApkUpdate) {
         )
     )
 }
+

@@ -7,7 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -24,6 +24,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.ui.PlayerView
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 
@@ -71,14 +72,21 @@ internal class TvActivity : Activity(), Renderer {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         player = ExoPlayer.Builder(this).setRenderersFactory(renderers).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
+            addAnalyticsListener(object : AnalyticsListener {
+                override fun onDroppedVideoFrames(
+                    eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long
+                ) {
+                    AppLog.record("TvExoPlayback", "Dropped video frames=$droppedFrames over ${elapsedMs}ms")
+                }
+            })
             addListener(object : Player.Listener {
                 override fun onTracksChanged(tracks: Tracks) {
                     val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                    Log.i("TvExoAudio", "Audio groups=${audioGroups.size}, total groups=${tracks.groups.size}")
+                    AppLog.record("TvExoAudio", "Audio groups=${audioGroups.size}, total groups=${tracks.groups.size}")
                     audioGroups.forEachIndexed { groupIndex, group ->
                         for (trackIndex in 0 until group.length) {
                             val format = group.getTrackFormat(trackIndex)
-                            Log.i("TvExoAudio", "Audio $groupIndex:$trackIndex " +
+                            AppLog.record("TvExoAudio", "Audio $groupIndex:$trackIndex " +
                                 "mime=${format.sampleMimeType} codecs=${format.codecs} " +
                                 "channels=${format.channelCount} sampleRate=${format.sampleRate} " +
                                 "supported=${group.isTrackSupported(trackIndex)} " +
@@ -86,6 +94,21 @@ internal class TvActivity : Activity(), Renderer {
                                 "selected=${group.isTrackSelected(trackIndex)}")
                         }
                     }
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    val label = when (playbackState) {
+                        Player.STATE_BUFFERING -> "buffering"
+                        Player.STATE_READY -> "ready"
+                        Player.STATE_ENDED -> "ended"
+                        else -> "idle"
+                    }
+                    AppLog.record("TvExoPlayback",
+                        "$label position=${player.currentPosition}ms buffered=${player.totalBufferedDuration}ms")
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    AppLog.record("TvExoPlayback", "Playback error: ${error.errorCodeName}")
                 }
 
                 override fun onEvents(player: Player, events: Player.Events) = updateStatus()
@@ -146,6 +169,7 @@ internal class TvActivity : Activity(), Renderer {
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 try {
                     startActivityForResult(intent, 42)
+                    AppLog.record("TvExoUpdate", "System installer opened")
                 } catch (_: android.content.ActivityNotFoundException) {
                     apkUpdate.pending.delete()
                     Toast.makeText(this, "系统安装器不可用", Toast.LENGTH_LONG).show()
@@ -320,3 +344,4 @@ internal class TvActivity : Activity(), Renderer {
             } + "</InstanceID></Event>")
     }
 }
+
