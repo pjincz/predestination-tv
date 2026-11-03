@@ -13,6 +13,8 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import android.widget.TextView
@@ -33,6 +35,10 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
     private lateinit var status: TextView
+    private lateinit var loadControl: RebufferLoadControl
+    private lateinit var bufferingPanel: LinearLayout
+    private lateinit var bufferingText: TextView
+    private lateinit var bufferingProgress: ProgressBar
     private var updateDialog: AlertDialog? = null
     private var adminDialog: AlertDialog? = null
     private var shownApproval: AdminPage.Approval? = null
@@ -60,9 +66,23 @@ internal class TvActivity : Activity(), Renderer {
             gravity = Gravity.CENTER
             textSize = 22f
         }
+        bufferingText = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 22f
+        }
+        bufferingProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
+        bufferingPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 16, 24, 16)
+            setBackgroundColor(0xcc202020.toInt())
+            visibility = View.GONE
+            addView(bufferingText)
+            addView(bufferingProgress, LinearLayout.LayoutParams(-1, -2))
+        }
         setContentView(FrameLayout(this).apply {
             addView(video, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
+            addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         })
     }
 
@@ -70,7 +90,9 @@ internal class TvActivity : Activity(), Renderer {
         super.onStart()
         val renderers = NextRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-        player = ExoPlayer.Builder(this).setRenderersFactory(renderers).build().apply {
+        loadControl = RebufferLoadControl()
+        player = ExoPlayer.Builder(this).setRenderersFactory(renderers)
+            .setLoadControl(loadControl).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
             addAnalyticsListener(object : AnalyticsListener {
                 override fun onDroppedVideoFrames(
@@ -213,9 +235,26 @@ internal class TvActivity : Activity(), Renderer {
             .also { it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus() }
     }
 
+    private fun updateBufferingProgress() {
+        val buffering = player.playbackState == Player.STATE_BUFFERING && player.playWhenReady
+        bufferingPanel.visibility = if (buffering) View.VISIBLE else View.GONE
+        if (!buffering) return
+        val target = loadControl.targetMs
+        bufferingProgress.isIndeterminate = target == 0L
+        if (target == 0L) {
+            bufferingText.text = "正在缓冲"
+            return
+        }
+        val buffered = player.totalBufferedDuration.coerceIn(0, target)
+        bufferingProgress.max = target.toInt()
+        bufferingProgress.progress = buffered.toInt()
+        bufferingText.text = "正在缓冲 · %.1f / %.0f 秒".format(buffered / 1000.0, target / 1000.0)
+    }
+
     private fun updateStatus() {
         updateAdminApproval()
         confirmUpdate()
+        updateBufferingProgress()
         val waiting = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
         status.visibility = if (waiting) View.VISIBLE else View.GONE
         video.useController = !waiting
@@ -344,4 +383,5 @@ internal class TvActivity : Activity(), Renderer {
             } + "</InstanceID></Event>")
     }
 }
+
 
