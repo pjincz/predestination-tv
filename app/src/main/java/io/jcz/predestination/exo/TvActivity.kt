@@ -1,6 +1,8 @@
 package io.jcz.predestination.exo
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -11,6 +13,8 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import android.widget.TextView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -18,14 +22,20 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 
 @androidx.annotation.OptIn(UnstableApi::class)
 internal class TvActivity : Activity(), Renderer {
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
     private lateinit var status: TextView
+    private var updateDialog: AlertDialog? = null
+    private var adminDialog: AlertDialog? = null
+    private var shownApproval: AdminPage.Approval? = null
+    private val apkUpdate by lazy { ApkUpdate(applicationContext) }
     private val main = Handler(Looper.getMainLooper())
     private var uri = ""
     private var metadata = ""
@@ -41,6 +51,8 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val installedAt = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        if (apkUpdate.pending.lastModified() < installedAt) apkUpdate.pending.delete()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         video = PlayerView(this)
         status = TextView(this).apply {
@@ -55,7 +67,9 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onStart() {
         super.onStart()
-        player = ExoPlayer.Builder(this).build().apply {
+        val renderers = NextRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        player = ExoPlayer.Builder(this).setRenderersFactory(renderers).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
             addListener(object : Player.Listener {
                 override fun onTracksChanged(tracks: Tracks) {
@@ -85,6 +99,11 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onStop() {
         main.removeCallbacks(refresh)
+        adminDialog?.dismiss()
+        adminDialog = null
+        shownApproval = null
+        updateDialog?.dismiss()
+        updateDialog = null
         CastService.detach(this, this)
         video.player = null
         player.release()
@@ -115,7 +134,64 @@ internal class TvActivity : Activity(), Renderer {
         else -> "PLAYING"
     }
 
+    private fun confirmUpdate() {
+        if (!apkUpdate.pending.isFile || !hasWindowFocus() ||
+            updateDialog?.isShowing == true || adminDialog?.isShowing == true) return
+        updateDialog = AlertDialog.Builder(this)
+            .setMessage("打开系统安装器更新 Predestination TV Exo？")
+            .setPositiveButton("继续") { _, _ ->
+                val apk = FileProvider.getUriForFile(this, "$packageName.updates", apkUpdate.pending)
+                val intent = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(apk, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try {
+                    startActivityForResult(intent, 42)
+                } catch (_: android.content.ActivityNotFoundException) {
+                    apkUpdate.pending.delete()
+                    Toast.makeText(this, "系统安装器不可用", Toast.LENGTH_LONG).show()
+                } catch (_: SecurityException) {
+                    apkUpdate.pending.delete()
+                    Toast.makeText(this, "系统拒绝安装，请检查此来源的安装权限", Toast.LENGTH_LONG).show()
+                }
+            }
+            .setNegativeButton("取消") { _, _ -> apkUpdate.pending.delete() }
+            .setOnCancelListener { apkUpdate.pending.delete() }
+            .show()
+            .also { it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus() }
+    }
+
+    @Deprecated("Uses the platform installer activity result to release the staged APK.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 42) {
+            val apk = FileProvider.getUriForFile(this, "$packageName.updates", apkUpdate.pending)
+            revokeUriPermission(apk, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            apkUpdate.pending.delete()
+        }
+    }
+
+    private fun updateAdminApproval() {
+        val page = CastService.adminPage()
+        val approval = page?.awaitingApproval()
+        if (approval == shownApproval) return
+        adminDialog?.dismiss()
+        adminDialog = null
+        shownApproval = approval
+        if (approval == null) return
+
+        adminDialog = AlertDialog.Builder(this)
+            .setTitle("允许访问管理员页面？")
+            .setMessage("请求来自 ${approval.peer}。请核对浏览器配对码 ${approval.code}。")
+            .setPositiveButton("允许") { _, _ -> page.resolve(approval, true) }
+            .setNegativeButton("拒绝") { _, _ -> page.resolve(approval, false) }
+            .setOnCancelListener { page.resolve(approval, false) }
+            .show()
+            .also { it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus() }
+    }
+
     private fun updateStatus() {
+        updateAdminApproval()
+        confirmUpdate()
         val waiting = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
         status.visibility = if (waiting) View.VISIBLE else View.GONE
         video.useController = !waiting

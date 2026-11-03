@@ -18,6 +18,7 @@ internal class CastService : Service(), Renderer {
     private val main = Handler(Looper.getMainLooper())
     private val router = ReceiverRouter {}
     private var receiver: DlnaReceiver? = null
+    private var admin: AdminPage? = null
     private var lock: WifiManager.MulticastLock? = null
     private var address: String? = null
     private var registered = false
@@ -92,10 +93,12 @@ internal class CastService : Service(), Renderer {
             val id = prefs.getString("uuid", null) ?: "uuid:${UUID.randomUUID()}".also {
                 prefs.edit().putString("uuid", it).apply()
             }
-            receiver = DlnaReceiver(ip, id, "Predestination TV Exo · ${Build.MODEL}", this, lan.first)
+            val page = AdminPage(ApkUpdate(applicationContext))
+            receiver = DlnaReceiver(ip, id, "Predestination TV Exo · ${Build.MODEL}", this, lan.first, page)
+            admin = page
             android.util.Log.d("receiver", "Listening at ${ip.hostAddress}")
             address = ip.hostAddress
-            status = "等待投屏 · $address"
+            status = "等待投屏 · $address\n管理员页面 · ${receiver?.baseUrl}/admin"
         } catch (error: Exception) {
             android.util.Log.d("receiver", "Startup failed: ${error.javaClass.simpleName}: ${error.message}")
             android.util.Log.w("TvCast", "Receiver startup failed on ${ip.hostAddress}", error)
@@ -113,6 +116,7 @@ internal class CastService : Service(), Renderer {
         android.util.Log.d("receiver", "Disconnecting receiver; previous address=$address")
         receiver?.close()
         receiver = null
+        admin = null
         lock?.let { if (it.isHeld) it.release() }
         lock = null
         address = null
@@ -148,6 +152,8 @@ internal class CastService : Service(), Renderer {
         private var visiblePlayer: Renderer? = null
         var status = "接收服务未启动"
             private set
+
+        fun adminPage() = instance?.admin
 
         fun attach(context: Context, player: Renderer) {
             visiblePlayer = player

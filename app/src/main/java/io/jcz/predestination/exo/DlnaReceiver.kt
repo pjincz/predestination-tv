@@ -24,11 +24,13 @@ internal interface Renderer {
 /** Owned by the receiver service (or diagnostic screen); recreated when the LAN address changes. */
 internal class DlnaReceiver(
     private val address: Inet4Address, private val id: String,
-    private val name: String, private val renderer: Renderer, private val network: Network? = null
+    private val name: String, private val renderer: Renderer, private val network: Network?, private val admin: AdminPage
 ) : AutoCloseable {
     private val timer = Executors.newSingleThreadScheduledExecutor()
     private val subscriptions = ConcurrentHashMap<String, Subscription>()
-    private val http = HttpServer(address, ::request)
+    private val http: HttpServer = HttpServer(address, preferredPort = 7777, upload = { request, input, size ->
+        if (closed) HttpResponse(503) else admin.upload(request, baseUrl, input, size)
+    }, handler = ::request)
     private val group = InetAddress.getByName("239.255.255.250")
     private val networkInterface = NetworkInterface.getByInetAddress(address)
     private val ssdp = try {
@@ -124,6 +126,7 @@ internal class DlnaReceiver(
     private fun request(request: HttpRequest): HttpResponse {
         Log.d("TvCast", "${request.peer.hostAddress} ${request.method} ${request.path.substringBefore('?')}")
         if (closed) return HttpResponse(503)
+        if (request.path == "/admin") return admin.handle(request, baseUrl)
         if (request.method == "GET" && request.path == "/description.xml")
             return HttpResponse(body = description())
         val parts = request.path.trim('/').split('/')
