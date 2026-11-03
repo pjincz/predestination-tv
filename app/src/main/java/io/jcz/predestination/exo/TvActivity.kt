@@ -20,17 +20,25 @@ import androidx.core.content.FileProvider
 import android.widget.TextView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.common.util.ExperimentalApi
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.RenderersFactory
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.text.DefaultSubtitleParserFactory
+import androidx.media3.extractor.text.SubtitleParser
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.ui.PlayerView
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
+import io.github.anilbeesetti.nextlib.media3ext.renderer.NextTextRenderer
 
-@androidx.annotation.OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class, ExperimentalApi::class)
 internal class TvActivity : Activity(), Renderer {
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
@@ -90,8 +98,24 @@ internal class TvActivity : Activity(), Renderer {
         super.onStart()
         val renderers = NextRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        val subtitleRenderers = RenderersFactory { handler, videoEvents, audioEvents, textOutput, metadataOutput ->
+            renderers.createRenderers(handler, videoEvents, audioEvents, textOutput, metadataOutput)
+                .also { list ->
+                    list.filterIsInstance<NextTextRenderer>().forEach {
+                        @Suppress("DEPRECATION")
+                        it.delegate.experimentalSetLegacyDecodingEnabled(true)
+                    }
+                }
+        }
+        val parsers = DefaultSubtitleParserFactory()
+        val subtitleParsers = object : SubtitleParser.Factory by parsers {
+                // Leave PGS compressed until its track is selected for rendering.
+                override fun supportsFormat(format: Format): Boolean =
+                    format.sampleMimeType != MimeTypes.APPLICATION_PGS && parsers.supportsFormat(format)
+            }
         loadControl = RebufferLoadControl(BufferSettings(applicationContext))
-        player = ExoPlayer.Builder(this).setRenderersFactory(renderers)
+        player = ExoPlayer.Builder(this).setRenderersFactory(subtitleRenderers)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setSubtitleParserFactory(subtitleParsers))
             .setLoadControl(loadControl).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
             addAnalyticsListener(object : AnalyticsListener {
