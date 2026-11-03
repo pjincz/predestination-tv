@@ -8,6 +8,46 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class AudioGainTest {
+    @Test fun channelGainPreservesEightChannelsAndUpdatesWithoutRestart() {
+        val processor = AudioGain {}
+        val format = AudioFormat(48000, 8, C.ENCODING_PCM_16BIT)
+        assertEquals(format, processor.configure(format))
+        processor.flush()
+        processor.setChannels(listOf(0, 1), -12)
+        processor.setChannels(listOf(4, 5, 6, 7), -18)
+        assertEquals(listOf(251, 251, 1000, 1000, 125, 125, 125, 125),
+            samples(processor, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000))
+        processor.setChannels(listOf(2), 3)
+        assertEquals(1412, samples(processor, 0, 0, 1000, 0, 0, 0, 0, 0)[2])
+        processor.resetChannels()
+        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7, 8), samples(processor, 1, 2, 3, 4, 5, 6, 7, 8))
+    }
+
+    @Test fun formatChangeClearsOldChannelSettingsAndGroupsCoverEveryChannel() {
+        val processor = processor()
+        processor.setChannels(listOf(0, 1), -30)
+        processor.configure(AudioFormat(48000, 8, C.ENCODING_PCM_16BIT))
+        processor.flush()
+        assertEquals(0, processor.channelLevel(0))
+        for (count in 1..10) {
+            assertEquals((0 until count).toList(), channelGroups(count).flatMap { it.indices }.sorted())
+        }
+    }
+
+    @Test fun nightModeWorksAtZeroManualGainAndCanBeDisabledImmediately() {
+        val processor = processor()
+        processor.nightMode = true
+        val boosted = samples(processor, 100, -100)
+        assertTrue(boosted[0] > 100)
+        assertEquals(-boosted[0], boosted[1])
+        processor.setGain(18)
+        val loud = samples(processor, 32767, -32768)
+        assertTrue(loud.all { it in -32768..32767 })
+        processor.nightMode = false
+        processor.setGain(0)
+        assertEquals(listOf(1234, -1234), samples(processor, 1234, -1234))
+    }
+
     @Test fun acceptsEmptyPipelineBufferBeforeFirstAudioFrame() {
         val processor = processor()
         processor.queueInput(androidx.media3.common.audio.AudioProcessor.EMPTY_BUFFER)
@@ -27,6 +67,7 @@ class AudioGainTest {
             flush()
             setGain(18)
         }
+        logs.clear()
         samples(processor, 30000, -15000)
         processor.setGain(0)
         samples(processor, 1000, -1000)

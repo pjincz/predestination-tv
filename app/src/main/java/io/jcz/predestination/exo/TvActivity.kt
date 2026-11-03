@@ -151,6 +151,8 @@ internal class TvActivity : Activity(), Renderer {
             })
             addListener(object : Player.Listener {
                 override fun onTracksChanged(tracks: Tracks) {
+                    gainDialog?.dismiss()
+                    gainDialog = null
                     val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                     AppLog.record("TvExoAudio", "Audio groups=${audioGroups.size}, total groups=${tracks.groups.size}")
                     audioGroups.forEachIndexed { groupIndex, group ->
@@ -227,21 +229,14 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun setAudioGain(db: Int) {
         audioGain.setGain(db)
-        gainButton.text = "声音增益：${if (db == 0) "0" else "+$db"} dB"
+        gainButton.text = "声音增益：${if (db == 0) "0" else "+$db"} dB" +
+            (if (audioGain.nightMode) " · 动态压缩" else "")
         AppLog.record("TvExoAudio", "Audio gain=${db}dB")
     }
 
     private fun showGainDialog() {
         if (gainDialog?.isShowing == true) return
-        val values = (0..18 step 3).toList()
-        gainDialog = AlertDialog.Builder(this)
-            .setTitle("声音增益（新视频自动归零）")
-            .setSingleChoiceItems(values.map { if (it == 0) "0 dB（原音量）" else "+$it dB" }
-                .toTypedArray(), values.indexOf(audioGain.decibels)) { _, index ->
-                setAudioGain(values[index])
-            }
-            .setPositiveButton("完成", null)
-            .show()
+        gainDialog = audioControls(this, audioGain, ::setAudioGain).also { it.show() }
     }
 
     private fun stopPlayback() {
@@ -372,6 +367,8 @@ internal class TvActivity : Activity(), Renderer {
                 if (next.isNotEmpty()) Protocol.mediaUri(next)
                 gainDialog?.dismiss()
                 gainDialog = null
+                audioGain.resetChannels()
+                audioGain.nightMode = false
                 setAudioGain(0)
                 uri = next
                 metadata = args.getValue("CurrentURIMetaData")
