@@ -8,10 +8,11 @@ import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.analytics.PlayerId
 
 @UnstableApi
-internal class RebufferLoadControl : DefaultLoadControl() {
+internal class RebufferLoadControl(private val settings: BufferSettings) : DefaultLoadControl() {
     private val period = Timeline.Period()
     private val window = Timeline.Window()
     private var lastRebuffer = C.TIME_UNSET
+    private var limits = settings.read()
     private var nextTargetMs = 5000L
     private var capLogged = false
 
@@ -22,6 +23,7 @@ internal class RebufferLoadControl : DefaultLoadControl() {
     override fun onPrepared(playerId: PlayerId) {
         super.onPrepared(playerId)
         lastRebuffer = C.TIME_UNSET
+        limits = settings.read()
         nextTargetMs = 5000
         targetMs = 0
     }
@@ -44,7 +46,7 @@ internal class RebufferLoadControl : DefaultLoadControl() {
         if (event != lastRebuffer || targetMs == 0L) {
             lastRebuffer = event
             targetMs = nextTargetMs
-            nextTargetMs = (nextTargetMs * 2).coerceAtMost(60_000)
+            nextTargetMs = (nextTargetMs * 2).coerceAtMost(limits.seconds * 1000L)
             capLogged = false
             AppLog.record("TvExoPlayback", "Rebuffer target=${targetMs}ms")
         }
@@ -52,7 +54,7 @@ internal class RebufferLoadControl : DefaultLoadControl() {
     }
 
     private fun reachedMemoryTarget(parameters: LoadControl.Parameters): Boolean {
-        if (getAllocator(parameters.playerId).totalBytesAllocated < 64 * 1024 * 1024) return false
+        if (getAllocator(parameters.playerId).totalBytesAllocated < limits.memoryMiB * 1024 * 1024) return false
         if (targetMs > 0 && !capLogged) {
             capLogged = true
             AppLog.record("TvExoPlayback",
@@ -64,8 +66,10 @@ internal class RebufferLoadControl : DefaultLoadControl() {
     override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean {
         val target = rebufferTarget(parameters)
         if (target == 0L) {
-            return (!isHttpVod(parameters) || !reachedMemoryTarget(parameters)) &&
-                super.shouldContinueLoading(parameters)
+            if (isHttpVod(parameters) &&
+                (parameters.bufferedDurationUs >= limits.seconds * 1_000_000L ||
+                    reachedMemoryTarget(parameters))) return false
+            return super.shouldContinueLoading(parameters)
         }
         return parameters.bufferedDurationUs < target * 1000 * parameters.playbackSpeed &&
             !reachedMemoryTarget(parameters)

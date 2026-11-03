@@ -14,6 +14,7 @@ private const val APPROVAL_SECONDS = 120
 internal class AdminPage(private val context: Context) {
     private val preferences = context.getSharedPreferences("admin", Context.MODE_PRIVATE)
     private val update = ApkUpdate(context)
+    private val bufferSettings = BufferSettings(context)
     private val activityManager = context.getSystemService(ActivityManager::class.java)
     private val appVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
     internal data class Approval(val id: String, val code: String, val peer: String)
@@ -67,6 +68,7 @@ internal class AdminPage(private val context: Context) {
     @Synchronized
     fun handle(request: HttpRequest, baseUrl: String): HttpResponse {
         if (request.headers["host"] != baseUrl.removePrefix("http://")) return page(403, "地址无效")
+        if (request.path == "/admin" && request.method == "POST") return saveBufferSettings(request, baseUrl)
         if (request.method != "GET") return page(405, "请求方法不支持")
         if (request.headers["sec-fetch-site"] == "cross-site") return page(403, "请直接打开管理员地址")
         val now = SystemClock.elapsedRealtime()
@@ -126,6 +128,40 @@ internal class AdminPage(private val context: Context) {
     private fun HttpResponse.withCookie(name: String, value: String, seconds: Int) =
         copy(headers = headers + ("Set-Cookie" to "$name=$value; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=$seconds"))
 
+    private fun saveBufferSettings(request: HttpRequest, baseUrl: String): HttpResponse {
+        if (request.headers["origin"] != baseUrl || !authenticated(request))
+            return page(403, "请先在电视上授权")
+        if (request.headers["content-type"]?.substringBefore(';') != "application/x-www-form-urlencoded" ||
+            request.body.size > 256) return page(400, "缓冲设置格式无效")
+        val fields = request.body.toString(Charsets.UTF_8).split('&').associate {
+            it.substringBefore('=') to it.substringAfter('=', "")
+        }
+        val memory = fields["memoryMiB"]?.toIntOrNull()
+        val seconds = fields["seconds"]?.toIntOrNull()
+        if (memory == null || memory !in BufferSettings.memoryRange ||
+            seconds == null || seconds !in BufferSettings.durationRange)
+            return page(400, "缓冲设置超出范围")
+        if (!bufferSettings.save(BufferSettings.Limits(memory, seconds))) return page(503, "保存失败，请重试")
+        return HttpResponse(303, headers = mapOf("Location" to "/admin", "Cache-Control" to "no-store"))
+    }
+
+    private fun bufferForm(): String {
+        val limits = bufferSettings.read()
+        val memory = BufferSettings.memoryRange
+        val duration = BufferSettings.durationRange
+        return """
+            <h2>HTTP(S) 点播缓冲</h2>
+            <form action="/admin" method="post">
+                <p><label>最大缓冲内存 <input name="memoryMiB" type="number" required
+                    min="${memory.first}" max="${memory.last}" value="${limits.memoryMiB}"> MiB</label></p>
+                <p><label>最大缓冲时长 <input name="seconds" type="number" required
+                    min="${duration.first}" max="${duration.last}" value="${limits.seconds}"> 秒</label></p>
+                <button type="submit">保存缓冲设置</button>
+                <p>下次播放生效。</p>
+            </form>
+        """.trimIndent()
+    }
+
     private fun deviceInfo(): String {
         val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
         val fields = listOf(
@@ -146,6 +182,7 @@ internal class AdminPage(private val context: Context) {
 
     private fun dashboard() = page(200, "管理员页面", """
             ${deviceInfo()}
+            ${bufferForm()}
             <p><a href="/admin/logs" target="_blank" rel="noopener">查看运行日志</a></p>
             <h2>上传 APK 更新</h2>
             <input id="apk" type="file" accept=".apk">

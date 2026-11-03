@@ -90,7 +90,7 @@ internal class TvActivity : Activity(), Renderer {
         super.onStart()
         val renderers = NextRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-        loadControl = RebufferLoadControl()
+        loadControl = RebufferLoadControl(BufferSettings(applicationContext))
         player = ExoPlayer.Builder(this).setRenderersFactory(renderers)
             .setLoadControl(loadControl).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
