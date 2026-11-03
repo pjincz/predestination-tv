@@ -88,11 +88,8 @@ internal fun audioControls(
         }
     }
     rows.addView(night)
-    rows.addView(TextView(context).apply {
-        text = "上下选择，左右每档 3 dB。成对声道联动；保留原声道，由电视混音。新视频恢复默认。"
-    })
     val dialog = AlertDialog.Builder(context)
-        .setTitle("音频设置 · ${audio.channelCount} 声道")
+        .setTitle("音量增益 · ${audio.channelCount} 声道")
         .setView(ScrollView(context).apply { addView(rows) })
         .setPositiveButton("完成", null)
         .setNeutralButton("全部重置", null)

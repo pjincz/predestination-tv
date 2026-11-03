@@ -5,6 +5,7 @@ plugins {
 android {
     namespace 'io.jcz.predestination.exo'
     compileSdk 36
+    testOptions.unitTests.includeAndroidResources = true
 
     defaultConfig {
         def targetAbi = providers.gradleProperty('targetAbi').orNull

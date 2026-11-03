@@ -1,0 +1,9 @@
+<resources>
+    <color name="osd_accent">#8BAD93</color>
+    <color name="osd_focus_fill">#315C42</color>
+    <color name="osd_focus_hint">#338BAD93</color>
+    <color name="osd_panel">#EB171B19</color>
+    <color name="osd_button">#25352E</color>
+    <color name="osd_border">#52715A</color>
+    <color name="osd_focus_text">#F7FAF8</color>
+</resources>

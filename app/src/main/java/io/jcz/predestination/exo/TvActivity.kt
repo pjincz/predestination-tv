@@ -13,7 +13,6 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Toast
@@ -43,6 +42,7 @@ import io.github.anilbeesetti.nextlib.media3ext.renderer.NextTextRenderer
 internal class TvActivity : Activity(), Renderer {
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
+    private lateinit var osd: TvOsd
     private lateinit var status: TextView
     private lateinit var loadControl: RebufferLoadControl
     private lateinit var bufferingPanel: LinearLayout
@@ -58,8 +58,9 @@ internal class TvActivity : Activity(), Renderer {
     private var volume = 100
     private var muted = false
     private val audioGain = AudioGain()
-    private lateinit var gainButton: Button
     private var gainDialog: AlertDialog? = null
+    private val backExit = BackExit()
+    private var exitHint: Toast? = null
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -70,18 +71,25 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) { handleBack() }
+        }
         val installedAt = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
         if (apkUpdate.pending.lastModified() < installedAt) apkUpdate.pending.delete()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        video = PlayerView(this)
-        gainButton = Button(this).apply {
-            text = "声音增益：0 dB"
-            visibility = View.GONE
-            setOnClickListener { showGainDialog() }
+        video = PlayerView(this).apply { useController = false; isFocusable = false }
+        osd = TvOsd(this).apply {
+            toggle = { togglePlayback() }
+            seek = { seconds -> seekFromOsd(position() + seconds) }
+            seekFraction = { fraction -> seekFromOsd(duration() * fraction) }
+            addButton("播放 / 暂停") { togglePlayback() }
+            addButton("停止") { stopPlayback() }
+            addButton("字幕") { showTracks(C.TRACK_TYPE_TEXT) }
+            addButton("音轨") { showTracks(C.TRACK_TYPE_AUDIO) }
+            addButton("音量增益") { showGainDialog() }
         }
-        video.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
-            gainButton.visibility = if (uri.isNotEmpty()) visibility else View.GONE
-        })
         status = TextView(this).apply {
             gravity = Gravity.CENTER
             textSize = 22f
@@ -99,11 +107,18 @@ internal class TvActivity : Activity(), Renderer {
             addView(bufferingText)
             addView(bufferingProgress, LinearLayout.LayoutParams(-1, -2))
         }
-        setContentView(FrameLayout(this).apply {
+        setContentView(TvRemoteFrame(this) { event ->
+            ::player.isInitialized && !isWaiting() && osd.handleKey(event)
+        }.apply {
+            setOnClickListener {
+                if (::player.isInitialized && !isWaiting()) {
+                    if (osd.visibility == View.VISIBLE) osd.hide() else osd.show()
+                }
+            }
             addView(video, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
-            addView(gainButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
+            addView(osd, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
     }
 
@@ -199,6 +214,9 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        backExit.reset()
+        exitHint?.cancel()
+        osd.hide()
         gainDialog?.dismiss()
         gainDialog = null
         main.removeCallbacks(refresh)
@@ -216,8 +234,13 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_MENU && uri.isNotEmpty()) {
-            showGainDialog()
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+            if (event.repeatCount == 0) togglePlayback()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY || keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) player.pause()
+            else if (uri.isNotEmpty()) action(AV, SoapAction("Play", mapOf("Speed" to "1")))
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP && uri.isNotEmpty()) {
@@ -227,16 +250,92 @@ internal class TvActivity : Activity(), Renderer {
         return super.onKeyDown(keyCode, event)
     }
 
+    @Deprecated("Legacy Android back navigation; newer versions use OnBackInvokedDispatcher.")
+    @android.annotation.SuppressLint("GestureBackNavigation") // API 33+ callback registered in onCreate.
+    override fun onBackPressed() = handleBack()
+
+    private fun handleBack() {
+        val topLevel = osd.visibility != View.VISIBLE
+        val shouldExit = backExit.onBack(topLevel, android.os.SystemClock.elapsedRealtime())
+        exitHint?.cancel()
+        if (!topLevel) {
+            osd.hide()
+        } else if (shouldExit) {
+            finish()
+        } else {
+            exitHint = Toast.makeText(this, "双击返回键退出app", Toast.LENGTH_SHORT).also { it.show() }
+        }
+    }
+
+    @android.annotation.SuppressLint("GestureBackNavigation") // API 33+ callback is also registered below.
+    private fun trackDialogBack(dialog: AlertDialog) {
+        fun cancelFromBack() {
+            backExit.onBack(false, android.os.SystemClock.elapsedRealtime())
+            dialog.cancel()
+        }
+        dialog.setOnKeyListener { _, key, event ->
+            if (key != KeyEvent.KEYCODE_BACK) false
+            else {
+                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) cancelFromBack()
+                true
+            }
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            dialog.onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) { cancelFromBack() }
+        }
+    }
+
+    private fun togglePlayback() {
+        if (uri.isEmpty()) return
+        if (player.playWhenReady && player.playbackState != Player.STATE_IDLE &&
+            player.playbackState != Player.STATE_ENDED) player.pause()
+        else action(AV, SoapAction("Play", mapOf("Speed" to "1")))
+    }
+
+    private fun seekFromOsd(seconds: Double) {
+        if (player.isCurrentMediaItemSeekable) {
+            player.seekTo((seconds.coerceIn(0.0, duration()) * 1000).toLong())
+        }
+    }
+
+    private fun showTracks(type: Int) {
+        val choices = player.currentTracks.groups.filter { it.type == type }.flatMap { group ->
+            (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it }
+        }
+        val labels = listOf(if (type == C.TRACK_TYPE_TEXT) "关闭字幕" else "自动选择") +
+            choices.mapIndexed { index, (group, track) ->
+                val format = group.getTrackFormat(track)
+                listOfNotNull("${index + 1}", format.label, format.language, format.sampleMimeType)
+                    .joinToString(" · ")
+            }
+        AlertDialog.Builder(this)
+            .setTitle(if (type == C.TRACK_TYPE_TEXT) "字幕" else "音轨")
+            .setItems(labels.toTypedArray()) { _, index ->
+                val parameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type)
+                    .setTrackTypeDisabled(type, type == C.TRACK_TYPE_TEXT && index == 0)
+                if (index > 0) {
+                    val (group, track) = choices[index - 1]
+                    parameters.addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, track))
+                }
+                player.trackSelectionParameters = parameters.build()
+            }
+            .setNegativeButton("取消", null)
+            .show().also(::trackDialogBack)
+    }
+
     private fun setAudioGain(db: Int) {
         audioGain.setGain(db)
-        gainButton.text = "声音增益：${if (db == 0) "0" else "+$db"} dB" +
-            (if (audioGain.nightMode) " · 动态压缩" else "")
         AppLog.record("TvExoAudio", "Audio gain=${db}dB")
     }
 
     private fun showGainDialog() {
         if (gainDialog?.isShowing == true) return
-        gainDialog = audioControls(this, audioGain, ::setAudioGain).also { it.show() }
+        gainDialog = audioControls(this, audioGain, ::setAudioGain).also {
+            it.show()
+            trackDialogBack(it)
+        }
     }
 
     private fun stopPlayback() {
@@ -277,7 +376,10 @@ internal class TvActivity : Activity(), Renderer {
             .setNegativeButton("取消") { _, _ -> apkUpdate.pending.delete() }
             .setOnCancelListener { apkUpdate.pending.delete() }
             .show()
-            .also { it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus() }
+            .also {
+                trackDialogBack(it)
+                it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
+            }
     }
 
     @Deprecated("Uses the platform installer activity result to release the staged APK.")
@@ -306,7 +408,10 @@ internal class TvActivity : Activity(), Renderer {
             .setNegativeButton("拒绝") { _, _ -> page.resolve(approval, false) }
             .setOnCancelListener { page.resolve(approval, false) }
             .show()
-            .also { it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus() }
+            .also {
+                trackDialogBack(it)
+                it.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
+            }
     }
 
     private fun updateBufferingProgress() {
@@ -325,14 +430,25 @@ internal class TvActivity : Activity(), Renderer {
         bufferingText.text = "正在缓冲 · %.1f / %.0f 秒".format(buffered / 1000.0, target / 1000.0)
     }
 
+    private fun isWaiting() = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
+
     private fun updateStatus() {
         updateAdminApproval()
         confirmUpdate()
         updateBufferingProgress()
-        val waiting = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
+        val waiting = isWaiting()
+        if (waiting) osd.hide()
         status.visibility = if (waiting) View.VISIBLE else View.GONE
-        video.useController = !waiting
-        if (waiting) gainButton.visibility = View.GONE
+        osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), uri)
+        osd.source.text = TvOsd.displaySource(uri)
+        osd.source.visibility = if (uri.isEmpty()) View.GONE else View.VISIBLE
+        osd.playbackState.text = when {
+            waiting -> "等待播放"
+            player.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
+            !player.playWhenReady -> "已暂停"
+            else -> "正在播放"
+        }
+        osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
         if (!waiting) return
         val error = player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",
