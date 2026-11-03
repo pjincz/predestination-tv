@@ -92,6 +92,12 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     private val timeout = Runnable { hide() }
     private var lastButton = 0
     private var dragging = false
+    var pinned = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) show() else touch()
+        }
 
     init {
         orientation = VERTICAL
@@ -154,6 +160,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     }
 
     fun hide() {
+        if (pinned) return
         handler.removeCallbacks(timeout)
         clearFocus()
         visibility = GONE
@@ -161,7 +168,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
 
     private fun touch() {
         handler.removeCallbacks(timeout)
-        if (visibility == VISIBLE) handler.postDelayed(timeout, 10000)
+        if (visibility == VISIBLE && !pinned) handler.postDelayed(timeout, 10000)
     }
 
     fun updateProgress(position: Double, duration: Double, seekable: Boolean) {
@@ -216,11 +223,8 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
             val source = displaySource(mediaUrl)
             if (title.isEmpty()) return source.ifEmpty { "投屏媒体" }
             // Do not display signed URL query parameters in the title.
-            val lastSegment = mediaUrl.substringAfterLast('/')
             val urlLike = title.startsWith("http://", true) || title.startsWith("https://", true) ||
-                title == mediaUrl || (source.isNotEmpty() && title == lastSegment) ||
-                Regex("(?i)\\.(mp4|m4s|m4a|mp3|m3u8?|flac|aac|ogg|opus|webm|mkv|ts)(?:[?#]|$)")
-                    .containsMatchIn(title) ||
+                title.startsWith("rtsp://", true) || title == mediaUrl ||
                 Regex("[?&][A-Za-z0-9_%.-]+=").containsMatchIn(title)
             return if (urlLike) source.ifEmpty { title.substringBefore('?').substringBefore('#') }
                 .ifEmpty { "投屏媒体" } else title

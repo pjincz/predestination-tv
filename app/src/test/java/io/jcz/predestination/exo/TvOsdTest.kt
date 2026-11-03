@@ -13,6 +13,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class TvOsdTest {
+    @Test fun keepsSongFilenamesButHidesSignedUrls() {
+        val url = "https://example.com/play?token=secret&fpath=song.mp3"
+        assertEquals("歌曲.mp3", TvOsd.displayTitle("歌曲.mp3", url))
+        assertEquals("song.mp3", TvOsd.displayTitle("song.mp3", "https://example.com/song.mp3"))
+        assertEquals("movie.mkv", TvOsd.displayTitle("movie.mkv", url))
+        assertEquals("https://example.com", TvOsd.displayTitle(url, url))
+        assertEquals("https://example.com", TvOsd.displayTitle("play?token=secret", url))
+    }
+
     @Test fun remoteNavigatesButtonsAndTimelineWithoutTriggeringHiddenControls() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()

@@ -42,6 +42,7 @@ import io.github.anilbeesetti.nextlib.media3ext.renderer.NextTextRenderer
 internal class TvActivity : Activity(), Renderer {
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
+    private lateinit var musicBackground: MusicBackgroundView
     private lateinit var osd: TvOsd
     private lateinit var status: TextView
     private lateinit var loadControl: RebufferLoadControl
@@ -85,6 +86,9 @@ internal class TvActivity : Activity(), Renderer {
         if (apkUpdate.pending.lastModified() < installedAt) apkUpdate.pending.delete()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         video = PlayerView(this).apply { useController = false; isFocusable = false }
+        musicBackground = MusicBackgroundView(this).apply {
+            visibility = View.GONE
+        }
         osd = TvOsd(this).apply {
             toggle = { togglePlayback() }
             seek = { seconds -> seekFromOsd(position() + seconds) }
@@ -123,10 +127,12 @@ internal class TvActivity : Activity(), Renderer {
                 }
             }
             addView(video, FrameLayout.LayoutParams(-1, -1))
+            addView(musicBackground, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
             addView(osd, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
+        osd.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateMusicBounds() }
     }
 
     override fun onStart() {
@@ -221,9 +227,11 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        musicBackground.setPlaying(false)
         cancelPlaylist()
         backExit.reset()
         exitHint?.cancel()
+        osd.pinned = false
         osd.hide()
         gainDialog?.dismiss()
         gainDialog = null
@@ -268,7 +276,7 @@ internal class TvActivity : Activity(), Renderer {
     override fun onBackPressed() = handleBack()
 
     private fun handleBack() {
-        val topLevel = osd.visibility != View.VISIBLE
+        val topLevel = osd.pinned || osd.visibility != View.VISIBLE
         val shouldExit = backExit.onBack(topLevel, android.os.SystemClock.elapsedRealtime())
         exitHint?.cancel()
         if (!topLevel) {
@@ -465,6 +473,15 @@ internal class TvActivity : Activity(), Renderer {
         bufferingText.text = "正在缓冲 · %.1f / %.0f 秒".format(buffered / 1000.0, target / 1000.0)
     }
 
+    private fun updateMusicBounds() {
+        val params = musicBackground.layoutParams as FrameLayout.LayoutParams
+        val bottom = if (osd.pinned) osd.height else 0
+        if (params.bottomMargin != bottom) {
+            params.bottomMargin = bottom
+            musicBackground.layoutParams = params
+        }
+    }
+
     private fun isWaiting() = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
 
     private fun updateStatus() {
@@ -472,6 +489,13 @@ internal class TvActivity : Activity(), Renderer {
         confirmUpdate()
         updateBufferingProgress()
         val waiting = isWaiting()
+        val tracks = player.currentTracks
+        val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
+            !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
+        osd.pinned = !waiting && audioOnly
+        updateMusicBounds()
+        musicBackground.visibility = if (!waiting && audioOnly) View.VISIBLE else View.GONE
+        musicBackground.setPlaying(!waiting && audioOnly && player.isPlaying)
         if (waiting) osd.hide()
         status.visibility = if (waiting) View.VISIBLE else View.GONE
         osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), currentTrackUri())
