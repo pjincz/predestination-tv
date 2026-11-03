@@ -61,6 +61,11 @@ internal class TvActivity : Activity(), Renderer {
     private var gainDialog: AlertDialog? = null
     private val backExit = BackExit()
     private var exitHint: Toast? = null
+    private val playlistExecutor = java.util.concurrent.Executors.newCachedThreadPool()
+    private var playlistTask: java.util.concurrent.Future<*>? = null
+    private var playlistGeneration = 0
+    private var loadingPlaylist = false
+    private var playlistError: String? = null
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -85,6 +90,8 @@ internal class TvActivity : Activity(), Renderer {
             seek = { seconds -> seekFromOsd(position() + seconds) }
             seekFraction = { fraction -> seekFromOsd(duration() * fraction) }
             addButton("播放 / 暂停") { togglePlayback() }
+            addButton("上一首") { skipFromOsd(false) }
+            addButton("下一首") { skipFromOsd(true) }
             addButton("停止") { stopPlayback() }
             addButton("字幕") { showTracks(C.TRACK_TYPE_TEXT) }
             addButton("音轨") { showTracks(C.TRACK_TYPE_AUDIO) }
@@ -214,6 +221,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        cancelPlaylist()
         backExit.reset()
         exitHint?.cancel()
         osd.hide()
@@ -231,6 +239,11 @@ internal class TvActivity : Activity(), Renderer {
         uri = ""
         metadata = ""
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        playlistExecutor.shutdownNow()
+        super.onDestroy()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -338,7 +351,21 @@ internal class TvActivity : Activity(), Renderer {
         }
     }
 
+    private fun skipTrack(next: Boolean): Boolean {
+        if (next && player.hasNextMediaItem()) player.seekToNextMediaItem()
+        else if (!next && player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
+        else return false
+        return true
+    }
+
+    private fun skipFromOsd(next: Boolean) {
+        if (!skipTrack(next)) {
+            Toast.makeText(this, if (next) "没有下一首" else "没有上一首", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun stopPlayback() {
+        cancelPlaylist()
         player.stop()
         player.clearMediaItems()
         updateStatus()
@@ -346,6 +373,7 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun state() = when {
         uri.isEmpty() -> "NO_MEDIA_PRESENT"
+        loadingPlaylist -> "TRANSITIONING"
         player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED -> "STOPPED"
         !player.playWhenReady -> "PAUSED_PLAYBACK"
         player.playbackState == Player.STATE_BUFFERING -> "TRANSITIONING"
@@ -415,6 +443,13 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun updateBufferingProgress() {
+        if (loadingPlaylist) {
+            bufferingPanel.visibility = View.VISIBLE
+            bufferingText.text = "正在读取歌曲列表"
+            bufferingProgress.isIndeterminate = true
+            return
+        }
+        bufferingProgress.isIndeterminate = false
         val buffering = player.playbackState == Player.STATE_BUFFERING && player.playWhenReady
         bufferingPanel.visibility = if (buffering) View.VISIBLE else View.GONE
         if (!buffering) return
@@ -439,8 +474,8 @@ internal class TvActivity : Activity(), Renderer {
         val waiting = isWaiting()
         if (waiting) osd.hide()
         status.visibility = if (waiting) View.VISIBLE else View.GONE
-        osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), uri)
-        osd.source.text = TvOsd.displaySource(uri)
+        osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), currentTrackUri())
+        osd.source.text = TvOsd.displaySource(currentTrackUri())
         osd.source.visibility = if (uri.isEmpty()) View.GONE else View.VISIBLE
         osd.playbackState.text = when {
             waiting -> "等待播放"
@@ -450,7 +485,7 @@ internal class TvActivity : Activity(), Renderer {
         }
         osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
         if (!waiting) return
-        val error = player.playerError?.errorCodeName
+        val error = playlistError ?: player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",
             CastService.status, error?.let { "播放失败 · $it" }).joinToString("\n")
     }
@@ -463,7 +498,59 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun position() = player.currentPosition.coerceAtLeast(0) / 1000.0
 
-    private fun transportStatus() = if (player.playerError == null) "OK" else "ERROR_OCCURRED"
+    private fun transportStatus() =
+        if (player.playerError == null && playlistError == null) "OK" else "ERROR_OCCURRED"
+
+    private fun currentTrackUri() = player.currentMediaItem?.localConfiguration?.uri?.toString() ?: uri
+
+    private fun cancelPlaylist() {
+        playlistGeneration++
+        playlistTask?.cancel(true)
+        playlistTask = null
+        loadingPlaylist = false
+        playlistError = null
+    }
+
+    private fun startPlayback() {
+        if (loadingPlaylist) return
+        if (!M3uPlaylist.matches(uri)) {
+            player.setMediaItem(MediaItem.fromUri(Uri.parse(uri).normalizeScheme()))
+            player.prepare()
+            player.play()
+            return
+        }
+        cancelPlaylist()
+        loadingPlaylist = true
+        val generation = playlistGeneration
+        val source = uri
+        updateStatus()
+        playlistTask = playlistExecutor.submit {
+            val result = runCatching { M3uPlaylist.load(source) }
+            main.post {
+                if (generation != playlistGeneration) return@post
+                loadingPlaylist = false
+                playlistTask = null
+                result.onSuccess { list ->
+                    val items = list.entries.map { entry ->
+                        MediaItem.Builder().setUri(entry.url)
+                            .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder()
+                                .setTitle(entry.title).build())
+                            .apply { if (list.hls) setMimeType(MimeTypes.APPLICATION_M3U8) }
+                            .build()
+                    }
+                    AppLog.record("TvExoCast", "Playlist loaded: tracks=${items.size} hls=${list.hls}")
+                    player.setMediaItems(items)
+                    player.prepare()
+                    player.play()
+                }.onFailure { error ->
+                    // Avoid logging exception URLs: playlist links can contain access tokens.
+                    playlistError = "无法读取歌曲列表"
+                    AppLog.record("TvExoCast", "Playlist load failed: ${error.javaClass.simpleName}")
+                }
+                updateStatus()
+            }
+        }
+    }
 
     private fun transportActions(): String {
         if (uri.isEmpty()) return ""
@@ -472,6 +559,8 @@ internal class TvActivity : Activity(), Renderer {
             add("Stop")
             if (state() in listOf("PLAYING", "TRANSITIONING")) add("Pause")
             if (player.isCurrentMediaItemSeekable) add("Seek")
+            if (player.hasNextMediaItem()) add("Next")
+            if (player.hasPreviousMediaItem()) add("Previous")
         }.joinToString(",")
     }
 
@@ -495,13 +584,16 @@ internal class TvActivity : Activity(), Renderer {
                 if (args["Speed"] != "1") throw UpnpError(717, "Unsupported speed")
                 if (uri.isEmpty()) throw UpnpError(701, "No media present")
                 if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
-                    player.setMediaItem(MediaItem.fromUri(Uri.parse(uri).normalizeScheme()))
-                    player.prepare()
-                }
-                player.play()
+                    startPlayback()
+                } else player.play()
                 emptyMap()
             }
             "Pause" -> {
+                if (loadingPlaylist) {
+                    cancelPlaylist()
+                    updateStatus()
+                    return emptyMap()
+                }
                 if (state() in listOf("STOPPED", "NO_MEDIA_PRESENT"))
                     throw UpnpError(701, "Transition not available")
                 player.pause()
@@ -519,15 +611,18 @@ internal class TvActivity : Activity(), Renderer {
                 player.seekTo((target * 1000).toLong())
                 emptyMap()
             }
-            "Next", "Previous" -> throw UpnpError(701, "Transition not available")
+            "Next", "Previous" -> {
+                if (!skipTrack(action.name == "Next")) throw UpnpError(701, "Transition not available")
+                emptyMap()
+            }
             "GetTransportInfo" -> mapOf("CurrentTransportState" to state(),
                 "CurrentTransportStatus" to transportStatus(), "CurrentSpeed" to "1")
-            "GetPositionInfo" -> mapOf("Track" to if (uri.isEmpty()) "0" else "1",
+            "GetPositionInfo" -> mapOf("Track" to if (uri.isEmpty()) "0" else (player.currentMediaItemIndex + 1).toString(),
                 "TrackDuration" to Protocol.time(duration()), "TrackMetaData" to metadata,
-                "TrackURI" to uri,
+                "TrackURI" to currentTrackUri(),
                 "RelTime" to Protocol.time(position()), "AbsTime" to Protocol.time(position()),
                 "RelCount" to "2147483647", "AbsCount" to "2147483647")
-            "GetMediaInfo" -> mapOf("NrTracks" to if (uri.isEmpty()) "0" else "1",
+            "GetMediaInfo" -> mapOf("NrTracks" to if (uri.isEmpty()) "0" else player.mediaItemCount.coerceAtLeast(1).toString(),
                 "MediaDuration" to Protocol.time(duration()), "CurrentURI" to uri,
                 "CurrentURIMetaData" to metadata, "NextURI" to "", "NextURIMetaData" to "",
                 "PlayMedium" to "NETWORK", "RecordMedium" to "NOT_IMPLEMENTED", "WriteStatus" to "NOT_IMPLEMENTED")
@@ -566,7 +661,7 @@ internal class TvActivity : Activity(), Renderer {
         if (service == CM) return mapOf("SourceProtocolInfo" to "", "SinkProtocolInfo" to SINK,
             "CurrentConnectionIDs" to "0")
         val values = if (service == AV) mapOf("TransportState" to state(), "TransportStatus" to transportStatus(),
-            "CurrentTrackURI" to uri,
+            "CurrentTrackURI" to currentTrackUri(),
             "AVTransportURI" to uri, "CurrentTrackMetaData" to metadata,
             "CurrentTrackDuration" to Protocol.time(duration()), "CurrentTransportActions" to
                 transportActions())
