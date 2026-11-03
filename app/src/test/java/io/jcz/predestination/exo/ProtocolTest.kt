@@ -81,4 +81,3 @@ class ProtocolTest {
         builder.parse(Protocol.fault(UpnpError(402, "Invalid <arg> & value")).byteInputStream())
     }
 }
-

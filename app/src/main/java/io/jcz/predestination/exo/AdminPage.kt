@@ -1,6 +1,8 @@
 package io.jcz.predestination.exo
 
-import android.content.SharedPreferences
+import android.app.ActivityManager
+import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import java.security.MessageDigest
 import android.util.Base64
@@ -9,7 +11,11 @@ import java.security.SecureRandom
 private const val SESSION_SECONDS = 8 * 60 * 60
 private const val APPROVAL_SECONDS = 120
 
-internal class AdminPage(private val preferences: SharedPreferences, private val update: ApkUpdate) {
+internal class AdminPage(private val context: Context) {
+    private val preferences = context.getSharedPreferences("admin", Context.MODE_PRIVATE)
+    private val update = ApkUpdate(context)
+    private val activityManager = context.getSystemService(ActivityManager::class.java)
+    private val appVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
     internal data class Approval(val id: String, val code: String, val peer: String)
     private data class Pending(val approval: Approval, val expires: Long, var approved: Boolean? = null)
 
@@ -29,8 +35,8 @@ internal class AdminPage(private val preferences: SharedPreferences, private val
 
     private fun authenticated(request: HttpRequest): Boolean {
         val token = cookie(request, "admin_session") ?: return false
-        return System.currentTimeMillis() < preferences.getLong("sessionExpires", 0L) &&
-            sessionDigest(token) == preferences.getString("sessionDigest", null)
+        val digest = sessionDigest(token)
+        return System.currentTimeMillis() < preferences.getLong("session:$digest", 0L)
     }
 
     @Synchronized
@@ -80,13 +86,11 @@ internal class AdminPage(private val preferences: SharedPreferences, private val
         if (claim != null) {
             if (current == null || current.approval.id != claim || current.expires <= now ||
                 current.approved == false) {
-                return page(403, "授权已拒绝或过期").withCookie("admin_approval", "", 0)
+                return page(403, "授权已拒绝或过期", """<p><a href="/admin">重新请求授权</a></p>""").withCookie("admin_approval", "", 0)
             }
             if (current.approved == true) {
                 val session = token()
-                val expires = System.currentTimeMillis() + SESSION_SECONDS * 1000L
-                if (!preferences.edit().putString("sessionDigest", sessionDigest(session))
-                        .putLong("sessionExpires", expires).commit()) {
+                if (!saveSession(session)) {
                     return page(503, "无法保存授权，请重试")
                 }
                 pending = null
@@ -103,6 +107,17 @@ internal class AdminPage(private val preferences: SharedPreferences, private val
         return waiting(approval).withCookie("admin_approval", approval.id, APPROVAL_SECONDS)
     }
 
+    private fun saveSession(session: String): Boolean {
+        val now = System.currentTimeMillis()
+        val editor = preferences.edit()
+        for ((key, value) in preferences.all) {
+            if (key.startsWith("session:") && value is Long && value <= now) editor.remove(key)
+        }
+        return editor
+            .putLong("session:${sessionDigest(session)}", now + SESSION_SECONDS * 1000L)
+            .commit()
+    }
+
     private fun waiting(approval: Approval) = page(200, "等待电视授权", """
         <p>请在电视上核对配对码 <strong>${approval.code}</strong>，然后用遥控器确认。</p>
         <script>setTimeout(() => location.reload(), 1500);</script>
@@ -111,8 +126,27 @@ internal class AdminPage(private val preferences: SharedPreferences, private val
     private fun HttpResponse.withCookie(name: String, value: String, seconds: Int) =
         copy(headers = headers + ("Set-Cookie" to "$name=$value; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=$seconds"))
 
+    private fun deviceInfo(): String {
+        val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+        val fields = listOf(
+            "厂商" to Build.MANUFACTURER,
+            "型号" to Build.MODEL,
+            "Android" to "${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）",
+            "设备支持的 ABI" to Build.SUPPORTED_ABIS.joinToString(", "),
+            "系统内存" to "${memory.totalMem / (1024 * 1024)} MiB",
+            "当前可用内存" to "${memory.availMem / (1024 * 1024)} MiB",
+            "应用 Java 堆上限" to "${Runtime.getRuntime().maxMemory() / (1024 * 1024)} MiB",
+            "内部存储可用空间" to "${context.cacheDir.usableSpace / (1024 * 1024)} MiB",
+            "应用版本" to appVersion
+        )
+        return "<h2>电视信息</h2><table><tbody>" + fields.joinToString("") { (label, value) ->
+            "<tr><th scope=\"row\">${xml(label)}</th><td>${xml(value)}</td></tr>"
+        } + "</tbody></table>"
+    }
+
     private fun dashboard() = page(200, "管理员页面", """
-            <p><a href="/admin/logs">查看运行日志</a></p>
+            ${deviceInfo()}
+            <p><a href="/admin/logs" target="_blank" rel="noopener">查看运行日志</a></p>
             <h2>上传 APK 更新</h2>
             <input id="apk" type="file" accept=".apk">
             <button id="upload" type="button">上传</button>
@@ -145,11 +179,15 @@ internal class AdminPage(private val preferences: SharedPreferences, private val
         <!doctype html><html lang="zh-CN"><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>$title · Predestination TV Exo</title>
-        <main><h1>$title</h1>$content<p><a href="/admin">管理员页面</a></p></main></html>
+        <style>
+            table { border-collapse: collapse; }
+            th, td { border: 1px solid #888; padding: 6px 10px; text-align: left; }
+        </style>
+        <main><h1>$title</h1>$content</main></html>
         """.trimIndent(), mapOf(
             "Content-Type" to "text/html; charset=utf-8",
             "Cache-Control" to "no-store",
-            "Content-Security-Policy" to "default-src 'none'; form-action 'self'; frame-ancestors 'none'; connect-src 'self'; script-src 'unsafe-inline'",
+            "Content-Security-Policy" to "default-src 'none'; form-action 'self'; frame-ancestors 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
             "X-Content-Type-Options" to "nosniff"
         )
     )

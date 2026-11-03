@@ -46,4 +46,3 @@ internal class ApkUpdate(private val context: Context) {
         }
     }
 }
-

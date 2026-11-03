@@ -383,5 +383,3 @@ internal class TvActivity : Activity(), Renderer {
             } + "</InstanceID></Event>")
     }
 }
-
-

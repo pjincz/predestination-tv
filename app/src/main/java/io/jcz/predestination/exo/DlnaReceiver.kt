@@ -241,5 +241,3 @@ internal class DlnaReceiver(
         timer.shutdownNow()
     }
 }
-
-

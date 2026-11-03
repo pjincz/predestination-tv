@@ -92,4 +92,3 @@ class ReceiverRouterTest {
         assertEquals(0, opens)
     }
 }
-

@@ -157,5 +157,3 @@ internal object Protocol {
             "</serviceStateTable></scpd>"
     }
 }
-
-
