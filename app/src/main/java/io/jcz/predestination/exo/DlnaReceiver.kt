@@ -126,6 +126,7 @@ internal class DlnaReceiver(
     private fun request(request: HttpRequest): HttpResponse {
         Log.d("TvCast", "${request.peer.hostAddress} ${request.method} ${request.path.substringBefore('?')}")
         if (closed) return HttpResponse(503)
+        if (request.path == "/admin/screenshot") return admin.screenshot(request, baseUrl)
         if (request.path == "/admin" || request.path == "/admin/logs") return admin.handle(request, baseUrl)
         if (request.method == "GET" && request.path == "/description.xml")
             return HttpResponse(body = description())

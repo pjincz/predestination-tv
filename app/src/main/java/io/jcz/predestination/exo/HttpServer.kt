@@ -16,7 +16,8 @@ internal data class HttpRequest(
 )
 
 internal data class HttpResponse(
-    val status: Int = 200, val body: String = "", val headers: Map<String, String> = emptyMap()
+    val status: Int = 200, val body: String = "", val headers: Map<String, String> = emptyMap(),
+    val binaryBody: ByteArray? = null
 )
 
 /** Small, bounded HTTP/1.1 endpoint; supports the UPnP SUBSCRIBE and UNSUBSCRIBE methods. */
@@ -125,7 +126,7 @@ internal class HttpServer(
         }
 
         private fun write(socket: Socket, response: HttpResponse) {
-            val body = response.body.toByteArray(Charsets.UTF_8)
+            val body = response.binaryBody ?: response.body.toByteArray(Charsets.UTF_8)
             val reason = when (response.status) {
                 200 -> "OK"
                 303 -> "See Other"

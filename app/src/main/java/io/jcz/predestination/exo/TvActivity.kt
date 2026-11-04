@@ -137,6 +137,7 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onStart() {
         super.onStart()
+        VideoScreenshot.attach(video.videoSurfaceView as? android.view.SurfaceView)
         setAudioGain(0)
         val renderers = object : NextRenderersFactory(this@TvActivity) {
             override fun buildAudioSink(
@@ -171,6 +172,29 @@ internal class TvActivity : Activity(), Renderer {
             .setLoadControl(loadControl).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
             addAnalyticsListener(object : AnalyticsListener {
+                override fun onVideoDecoderInitialized(
+                    eventTime: AnalyticsListener.EventTime, decoderName: String,
+                    initializedTimestampMs: Long, initializationDurationMs: Long
+                ) {
+                    AppLog.record("TvExoVideo", "decoder=$decoderName output=${video.videoSurfaceView?.javaClass?.simpleName}")
+                }
+
+                override fun onVideoInputFormatChanged(
+                    eventTime: AnalyticsListener.EventTime, format: Format,
+                    decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?
+                ) {
+                    AppLog.record("TvExoVideo", "input=${format.sampleMimeType} codecs=${format.codecs} " +
+                        "size=${format.width}x${format.height} fps=${format.frameRate} color=${format.colorInfo}")
+                }
+
+                override fun onRenderedFirstFrame(
+                    eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long
+                ) {
+                    AppLog.record("TvExoVideo", "first frame output=${video.videoSurfaceView?.javaClass?.simpleName} " +
+                        "view=${video.videoSurfaceView?.width}x${video.videoSurfaceView?.height} " +
+                        "video=${player.videoSize}")
+                }
+
                 override fun onDroppedVideoFrames(
                     eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long
                 ) {
@@ -227,6 +251,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        VideoScreenshot.attach(null)
         musicBackground.setPlaying(false)
         cancelPlaylist()
         backExit.reset()

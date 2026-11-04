@@ -109,6 +109,15 @@ internal class AdminPage(private val context: Context) {
         return waiting(approval).withCookie("admin_approval", approval.id, APPROVAL_SECONDS)
     }
 
+    fun screenshot(request: HttpRequest, baseUrl: String): HttpResponse {
+        val allowed = synchronized(this) {
+            request.method == "GET" && request.headers["host"] == baseUrl.removePrefix("http://") &&
+                request.headers["sec-fetch-site"] != "cross-site" && authenticated(request)
+        }
+        if (!allowed) return page(403, "请先在电视上授权")
+        return VideoScreenshot.capture()
+    }
+
     private fun saveSession(session: String): Boolean {
         val now = System.currentTimeMillis()
         val editor = preferences.edit()
@@ -182,6 +191,8 @@ internal class AdminPage(private val context: Context) {
 
     private fun dashboard() = page(200, "管理员页面", """
             ${deviceInfo()}
+            <p><a href="/admin/screenshot" target="_blank" rel="noopener">截取视频画面（PNG）</a></p>
+            <p>截取当前视频，不含 OSD；打开后可保存图片。对比时请暂停在同一帧。</p>
             ${bufferForm()}
             <p><a href="/admin/logs" target="_blank" rel="noopener">查看运行日志</a></p>
             <h2>上传 APK 更新</h2>
