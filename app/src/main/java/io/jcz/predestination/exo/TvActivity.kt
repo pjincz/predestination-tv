@@ -533,10 +533,7 @@ internal class TvActivity : Activity(), Renderer {
         osd.hide()
         val actions = buildList<Pair<String, () -> Unit>> {
             if (!isWaiting()) add("停止播放" to { stopPlayback() })
-            add("息屏" to {
-                if (screenOffSupported) enterScreenOff()
-                else Toast.makeText(this@TvActivity, "此设备不支持息屏", Toast.LENGTH_SHORT).show()
-            })
+            if (screenOffSupported) add("息屏" to { enterScreenOff() })
             add("退出" to { exitApp() })
             add("取消" to {})
         }
