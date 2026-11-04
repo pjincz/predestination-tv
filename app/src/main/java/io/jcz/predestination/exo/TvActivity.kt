@@ -148,15 +148,6 @@ internal class TvActivity : Activity(), Renderer {
             addButton("字幕") { showTracks(C.TRACK_TYPE_TEXT) }
             addButton("音轨") { showTracks(C.TRACK_TYPE_AUDIO) }
             addButton("音量增益") { showGainDialog() }
-            if (screenOffSupported) {
-                addButton("息屏听音") { enterScreenOff() }
-                addButton("空闲息屏") {
-                    val enabled = AudioOnlyMode.toggle(this@TvActivity)
-                    idleScreenTimer.reset()
-                    Toast.makeText(this@TvActivity, if (enabled) "等待页空闲 30 秒自动息屏"
-                        else "已关闭空闲自动息屏", Toast.LENGTH_SHORT).show()
-                }
-            }
         }
         status = TextView(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)

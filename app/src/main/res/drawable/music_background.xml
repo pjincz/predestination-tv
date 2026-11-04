@@ -1,32 +1,32 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape>
-            <gradient android:startColor="#102938" android:centerColor="#233047"
-                android:endColor="#291C38" android:angle="315" />
+            <gradient android:startColor="@color/music_gradient_start" android:centerColor="@color/music_gradient_center"
+                android:endColor="@color/music_gradient_end" android:angle="315" />
         </shape>
     </item>
     <item android:width="240dp" android:height="240dp" android:gravity="center">
         <shape android:shape="oval">
-            <solid android:color="#18212E" />
-            <stroke android:width="2dp" android:color="#536B80" />
+            <solid android:color="@color/music_record" />
+            <stroke android:width="2dp" android:color="@color/music_border" />
         </shape>
     </item>
     <item android:width="190dp" android:height="190dp" android:gravity="center">
         <shape android:shape="oval">
-            <solid android:color="#18212E" />
-            <stroke android:width="1dp" android:color="#35495D" />
+            <solid android:color="@color/music_record" />
+            <stroke android:width="1dp" android:color="@color/music_groove" />
         </shape>
     </item>
     <item android:width="140dp" android:height="140dp" android:gravity="center">
         <shape android:shape="oval">
-            <solid android:color="#18212E" />
-            <stroke android:width="1dp" android:color="#35495D" />
+            <solid android:color="@color/music_record" />
+            <stroke android:width="1dp" android:color="@color/music_groove" />
         </shape>
     </item>
     <item android:width="76dp" android:height="76dp" android:gravity="center">
-        <shape android:shape="oval"><solid android:color="#5B8394" /></shape>
+        <shape android:shape="oval"><solid android:color="@color/music_label" /></shape>
     </item>
     <item android:width="12dp" android:height="12dp" android:gravity="center">
-        <shape android:shape="oval"><solid android:color="#18212E" /></shape>
+        <shape android:shape="oval"><solid android:color="@color/music_record" /></shape>
     </item>
 </layer-list>

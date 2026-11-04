@@ -48,11 +48,11 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     }
     val source = TextView(context).apply {
         textSize = 14f
-        setTextColor(Color.LTGRAY)
+        setTextColor(context.getColor(R.color.player_text_secondary))
         maxLines = 1
         ellipsize = android.text.TextUtils.TruncateAt.END
     }
-    val playbackState = TextView(context).apply { textSize = 15f; setTextColor(Color.LTGRAY) }
+    val playbackState = TextView(context).apply { textSize = 15f; setTextColor(context.getColor(R.color.player_text_secondary)) }
     val timeline = SeekBar(context).apply {
         max = 1000
         isFocusable = true
@@ -81,7 +81,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     }
     private val clock = TextView(context).apply {
         textSize = 15f
-        setTextColor(Color.LTGRAY)
+        setTextColor(context.getColor(R.color.player_text_secondary))
         gravity = Gravity.END
     }
     val buttons = LinearLayout(context).apply { orientation = HORIZONTAL }

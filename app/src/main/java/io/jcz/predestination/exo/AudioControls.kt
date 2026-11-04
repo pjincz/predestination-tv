@@ -36,7 +36,7 @@ internal fun audioControls(
             isFocusableInTouchMode = true
             minimumHeight = 48
             setOnFocusChangeListener { _, focused ->
-                row.setBackgroundColor(if (focused) 0xff35536b.toInt() else Color.TRANSPARENT)
+                row.setBackgroundColor(if (focused) context.getColor(R.color.osd_focus_fill) else Color.TRANSPARENT)
             }
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {

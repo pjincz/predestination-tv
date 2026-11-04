@@ -1,9 +1,20 @@
 <resources>
-    <color name="osd_accent">#8BAD93</color>
-    <color name="osd_focus_fill">#315C42</color>
-    <color name="osd_focus_hint">#338BAD93</color>
-    <color name="osd_panel">#EB171B19</color>
-    <color name="osd_button">#25352E</color>
-    <color name="osd_border">#52715A</color>
-    <color name="osd_focus_text">#F7FAF8</color>
+    <color name="osd_accent">#CE9BFA</color>
+    <color name="osd_focus_fill">#44394F</color>
+    <color name="osd_focus_hint">#33CE9BFA</color>
+    <color name="osd_panel">#EB191919</color>
+    <color name="osd_button">#2B2B2B</color>
+    <color name="osd_border">#555555</color>
+    <color name="osd_focus_text">#FAFAFA</color>
+    <color name="player_surface">#212121</color>
+    <color name="player_background">#160D20</color>
+    <color name="player_text_secondary">#CCCCCC</color>
+    <color name="music_gradient_start">#102938</color>
+    <color name="music_gradient_center">#233047</color>
+    <color name="music_gradient_end">#291C38</color>
+    <color name="music_record">#18212E</color>
+    <color name="music_border">#536B80</color>
+    <color name="music_groove">#35495D</color>
+    <color name="music_label">#5B8394</color>
+    <color name="music_ripple">#8FBECF</color>
 </resources>

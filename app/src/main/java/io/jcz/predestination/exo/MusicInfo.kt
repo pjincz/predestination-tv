@@ -15,8 +15,8 @@ internal class MusicInfo(context: Context) : LinearLayout(context) {
         maxLines = 1
         ellipsize = android.text.TextUtils.TruncateAt.END
     }
-    private val state = TextView(context).apply { textSize = 15f; setTextColor(Color.LTGRAY) }
-    private val time = TextView(context).apply { textSize = 15f; setTextColor(Color.LTGRAY) }
+    private val state = TextView(context).apply { textSize = 15f; setTextColor(context.getColor(R.color.player_text_secondary)) }
+    private val time = TextView(context).apply { textSize = 15f; setTextColor(context.getColor(R.color.player_text_secondary)) }
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
         max = 1000
         progressTintList = ColorStateList.valueOf(context.getColor(R.color.osd_accent))

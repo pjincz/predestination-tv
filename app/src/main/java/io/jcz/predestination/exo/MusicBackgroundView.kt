@@ -3,7 +3,6 @@ package io.jcz.predestination.exo
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
 import android.view.animation.LinearInterpolator
@@ -15,7 +14,7 @@ internal class MusicBackgroundView(context: Context) : View(context) {
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * density
-        color = Color.rgb(143, 190, 207)
+        color = context.getColor(R.color.music_ripple)
     }
     private var phase = 0f
     private var playing = false
