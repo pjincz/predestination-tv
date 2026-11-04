@@ -12,8 +12,9 @@
     <queries>
         <provider android:authorities="com.tianci.provider" />
     </queries>
-    <application android:label="Predestination TV Exo" android:icon="@drawable/tv_icon"
-        android:banner="@drawable/tv_banner" android:usesCleartextTraffic="true"
+    <application android:label="Predestination TV Exo" android:icon="@mipmap/launcher_icon"
+        android:roundIcon="@mipmap/launcher_icon"
+        android:banner="@mipmap/tv_banner" android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name=".TvActivity" android:exported="true"
             android:screenOrientation="landscape" android:launchMode="singleTop">
