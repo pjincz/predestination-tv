@@ -50,7 +50,7 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var artwork: CastArtwork
     private lateinit var castImage: CastArtwork
     private var imageState: String? = null
-    private var imageError: String? = null
+    private var imageError: Int? = null
     private var hasArtwork = false
     private lateinit var musicInfo: MusicInfo
     private var musicMode = false
@@ -97,10 +97,13 @@ internal class TvActivity : Activity(), Renderer {
     private var playlistTask: java.util.concurrent.Future<*>? = null
     private var playlistGeneration = 0
     private var loadingPlaylist = false
-    private var playlistError: String? = null
+    private var displayedLanguage = ""
+    private val localizedDialogs = mutableListOf<AlertDialog>()
+    private var playlistError: Int? = null
 
     private val refresh = object : Runnable {
         override fun run() {
+            refreshLanguage()
             updateStatus()
             checkIdleScreen()
             main.postDelayed(this, 1000)
@@ -140,14 +143,14 @@ internal class TvActivity : Activity(), Renderer {
             toggle = { togglePlayback() }
             seek = { seconds -> seekFromOsd(position() + seconds) }
             seekFraction = { fraction -> seekFromOsd(duration() * fraction) }
-            addButton("播放 / 暂停") { togglePlayback() }
-            addButton("上一首") { skipFromOsd(false) }
-            addButton("下一首") { skipFromOsd(true) }
-            playlistButton = addButton("选择曲目") { showPlaylist() }.apply { visibility = View.GONE }
-            addButton("停止") { stopPlayback() }
-            addButton("字幕") { showTracks(C.TRACK_TYPE_TEXT) }
-            addButton("音轨") { showTracks(C.TRACK_TYPE_AUDIO) }
-            addButton("音量增益") { showGainDialog() }
+            addButton(R.string.play_pause) { togglePlayback() }
+            addButton(R.string.previous) { skipFromOsd(false) }
+            addButton(R.string.next) { skipFromOsd(true) }
+            playlistButton = addButton(R.string.choose_track) { showPlaylist() }.apply { visibility = View.GONE }
+            addButton(R.string.stop) { stopPlayback() }
+            addButton(R.string.subtitles) { showTracks(C.TRACK_TYPE_TEXT) }
+            addButton(R.string.audio_tracks) { showTracks(C.TRACK_TYPE_AUDIO) }
+            addButton(R.string.audio_gain) { showGainDialog() }
         }
         status = TextView(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
@@ -197,6 +200,23 @@ internal class TvActivity : Activity(), Renderer {
         hideSystemBars(window)
     }
 
+    private fun refreshLanguage() {
+        localizedDialogs.removeAll { !it.isShowing }
+        val language = LanguageSettings(this).language()
+        if (language == displayedLanguage) return
+        displayedLanguage = language
+        osd.refreshLanguage()
+        // Refresh transient UI without recreating the player or WebView.
+        val gainWasShowing = gainDialog?.isShowing == true
+        val playlistWasShowing = playlistDialog?.isShowing == true
+        localizedDialogs.toList().forEach { it.dismiss() }
+        localizedDialogs.clear()
+        shownApproval = null
+        if (gainWasShowing) showGainDialog()
+        if (playlistWasShowing) showPlaylist()
+        CastService.refreshLanguage()
+    }
+
     private fun hideSystemBars(target: android.view.Window) {
         WindowCompat.getInsetsController(target, target.decorView).apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -211,7 +231,6 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onStart() {
         super.onStart()
-        VideoScreenshot.attach(video.videoSurfaceView as? android.view.SurfaceView)
         if (playerActive) {
             consumeExternalMedia()
             main.removeCallbacks(refresh)
@@ -355,7 +374,7 @@ internal class TvActivity : Activity(), Renderer {
         pendingOpen = null
         runCatching {
             val items = ExternalMedia.items(this, incoming)
-            require(items.isNotEmpty()) { "不支持此文件或链接" }
+            require(items.isNotEmpty()) { tr(R.string.unsupported_media) }
             restoreScreen()
             setCurrentTransportUri("", "")
             externalItems = items
@@ -364,7 +383,7 @@ internal class TvActivity : Activity(), Renderer {
             AppLog.record("TvExoPlayback", "Opened external media: count=${items.size}")
         }.onFailure { error ->
             AppLog.record("TvExoPlayback", "External media failed: ${error.javaClass.simpleName}")
-            Toast.makeText(this, "无法打开文件：${error.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, tr(R.string.file_open_error, error.message.orEmpty()), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -373,7 +392,6 @@ internal class TvActivity : Activity(), Renderer {
         playlistDialog?.dismiss()
         exitHint?.cancel()
         lastBackAt = null
-        VideoScreenshot.attach(null)
         musicBackground.setPlaying(false)
         if (sleeping && !isFinishing) {
             AppLog.record("TvExoScreen", "Screen off: keeping playback and cast receiver active")
@@ -490,12 +508,12 @@ internal class TvActivity : Activity(), Renderer {
             val due = wallTimer.update(now, idle && !wallPage.active)
             val seconds = wallTimer.countdownSeconds(now)
             sleepCountdown.visibility = if (seconds == null) View.GONE else View.VISIBLE
-            if (seconds != null) sleepCountdown.text = "${seconds} 秒后展示 Wall Page"
+            if (seconds != null) sleepCountdown.text = quantityText(R.plurals.wall_countdown, seconds)
             if (due) {
                 runCatching { wallPage.show(config) }.onFailure {
                     wallPage.hide()
                     AppLog.record("TvExoWall", "WebView unavailable: ${it.javaClass.simpleName}")
-                    Toast.makeText(this, "无法打开 Wall Page，请检查系统 WebView", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, tr(R.string.wall_open_error), Toast.LENGTH_LONG).show()
                 }
             }
             return
@@ -505,7 +523,7 @@ internal class TvActivity : Activity(), Renderer {
         val due = idleScreenTimer.update(now, eligible)
         val seconds = idleScreenTimer.countdownSeconds(now)
         sleepCountdown.visibility = if (seconds == null) View.GONE else View.VISIBLE
-        if (seconds != null) sleepCountdown.text = "${seconds} 秒后息屏\n按任意键取消 · 投屏自动亮屏"
+        if (seconds != null) sleepCountdown.text = quantityText(R.plurals.sleep_countdown, seconds)
         if (due) enterScreenOff()
     }
 
@@ -533,7 +551,7 @@ internal class TvActivity : Activity(), Renderer {
             if (!success && sleeping && !isDestroyed) {
                 screenOffSupported = false
                 restoreScreen()
-                Toast.makeText(this, "息屏失败，本次已停用", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, tr(R.string.screen_off_error), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -591,21 +609,21 @@ internal class TvActivity : Activity(), Renderer {
             exitDialog?.dismiss()
             return
         }
-        exitHint = Toast.makeText(this, "双击返回键退出app", Toast.LENGTH_SHORT).also { it.show() }
+        exitHint = Toast.makeText(this, tr(R.string.exit_hint), Toast.LENGTH_SHORT).also { it.show() }
         idleScreenTimer.reset()
         osd.hide()
         val actions = buildList<Pair<String, () -> Unit>> {
-            if (!isWaiting()) add("停止播放" to { stopPlayback() })
-            if (screenOffSupported) add("息屏" to { enterScreenOff() })
-            add("退出" to { exitApp() })
-            add("取消" to {})
+            if (!isWaiting()) add(tr(R.string.stop_playback) to { stopPlayback() })
+            if (screenOffSupported) add(tr(R.string.screen_off) to { enterScreenOff() })
+            add(tr(R.string.exit) to { exitApp() })
+            add(tr(R.string.cancel) to {})
         }
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             val padding = (16 * resources.displayMetrics.density).toInt()
             setPadding(padding, padding, padding, padding)
         }
-        val dialog = AlertDialog.Builder(this).setTitle("退出确认").setView(row).create()
+        val dialog = AlertDialog.Builder(this).setTitle(tr(R.string.exit_confirm)).setView(row).create()
         actions.forEach { (label, action) ->
             row.addView(android.widget.Button(this).apply {
                 text = label
@@ -635,6 +653,7 @@ internal class TvActivity : Activity(), Renderer {
 
     @android.annotation.SuppressLint("GestureBackNavigation") // API 33+ callback is also registered below.
     private fun trackDialogBack(dialog: AlertDialog) {
+        localizedDialogs.add(dialog)
         dialog.window?.let(::hideSystemBars)
         fun cancelFromBack() {
             if (dialog === exitDialog) handleBack() else dialog.cancel()
@@ -675,14 +694,14 @@ internal class TvActivity : Activity(), Renderer {
         val choices = player.currentTracks.groups.filter { it.type == type }.flatMap { group ->
             (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it }
         }
-        val labels = listOf(if (type == C.TRACK_TYPE_TEXT) "关闭字幕" else "自动选择") +
+        val labels = listOf(if (type == C.TRACK_TYPE_TEXT) tr(R.string.subtitles_off) else tr(R.string.automatic)) +
             choices.mapIndexed { index, (group, track) ->
                 val format = group.getTrackFormat(track)
                 listOfNotNull("${index + 1}", format.label, format.language, format.sampleMimeType)
                     .joinToString(" · ")
             }
         AlertDialog.Builder(this)
-            .setTitle(if (type == C.TRACK_TYPE_TEXT) "字幕" else "音轨")
+            .setTitle(if (type == C.TRACK_TYPE_TEXT) tr(R.string.subtitles) else tr(R.string.audio_tracks))
             .setItems(labels.toTypedArray()) { _, index ->
                 val parameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type)
                     .setTrackTypeDisabled(type, type == C.TRACK_TYPE_TEXT && index == 0)
@@ -692,7 +711,7 @@ internal class TvActivity : Activity(), Renderer {
                 }
                 player.trackSelectionParameters = parameters.build()
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(tr(R.string.cancel), null)
             .show().also(::trackDialogBack)
     }
 
@@ -745,7 +764,7 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun skipFromOsd(next: Boolean) {
         if (!skipTrack(next)) {
-            Toast.makeText(this, if (next) "没有下一首" else "没有上一首", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, if (next) tr(R.string.no_next) else tr(R.string.no_previous), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -754,11 +773,11 @@ internal class TvActivity : Activity(), Renderer {
         val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
         val labels = items.mapIndexed { index, item ->
             val title = TvOsd.displayTitle(item.mediaMetadata.title?.toString(),
-                item.localConfiguration?.uri?.toString().orEmpty())
+                item.localConfiguration?.uri?.toString().orEmpty(), fallback = tr(R.string.cast_media))
             "${index + 1}. $title"
         }.toTypedArray()
         playlistDialog = AlertDialog.Builder(this)
-            .setTitle("选择曲目")
+            .setTitle(tr(R.string.choose_track))
             .setSingleChoiceItems(labels, player.currentMediaItemIndex) { dialog, index ->
                 if (player.mediaItemCount == items.size && player.getMediaItemAt(index) == items[index]) {
                     player.seekToDefaultPosition(index)
@@ -767,7 +786,7 @@ internal class TvActivity : Activity(), Renderer {
                 }
                 dialog.dismiss()
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(tr(R.string.cancel), null)
             .create().also { dialog ->
                 dialog.setOnDismissListener { playlistDialog = null }
                 dialog.show()
@@ -803,8 +822,8 @@ internal class TvActivity : Activity(), Renderer {
         if (!apkUpdate.pending.isFile || !hasWindowFocus() ||
             updateDialog?.isShowing == true || adminDialog?.isShowing == true) return
         updateDialog = AlertDialog.Builder(this)
-            .setMessage("打开系统安装器更新 Predestination TV Exo？")
-            .setPositiveButton("继续") { _, _ ->
+            .setMessage(tr(R.string.install_prompt))
+            .setPositiveButton(tr(R.string.continue_action)) { _, _ ->
                 val apk = FileProvider.getUriForFile(this, "$packageName.updates", apkUpdate.pending)
                 val intent = Intent(Intent.ACTION_VIEW)
                     .setDataAndType(apk, "application/vnd.android.package-archive")
@@ -814,13 +833,13 @@ internal class TvActivity : Activity(), Renderer {
                     AppLog.record("TvExoUpdate", "System installer opened")
                 } catch (_: android.content.ActivityNotFoundException) {
                     apkUpdate.pending.delete()
-                    Toast.makeText(this, "系统安装器不可用", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, tr(R.string.installer_unavailable), Toast.LENGTH_LONG).show()
                 } catch (_: SecurityException) {
                     apkUpdate.pending.delete()
-                    Toast.makeText(this, "系统拒绝安装，请检查此来源的安装权限", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, tr(R.string.install_denied), Toast.LENGTH_LONG).show()
                 }
             }
-            .setNegativeButton("取消") { _, _ -> apkUpdate.pending.delete() }
+            .setNegativeButton(tr(R.string.cancel)) { _, _ -> apkUpdate.pending.delete() }
             .setOnCancelListener { apkUpdate.pending.delete() }
             .show()
             .also {
@@ -849,10 +868,10 @@ internal class TvActivity : Activity(), Renderer {
         if (approval == null) return
 
         adminDialog = AlertDialog.Builder(this)
-            .setTitle("允许访问管理员页面？")
-            .setMessage("请求来自 ${approval.peer}。请核对浏览器配对码 ${approval.code}。")
-            .setPositiveButton("允许") { _, _ -> page.resolve(approval, true) }
-            .setNegativeButton("拒绝") { _, _ -> page.resolve(approval, false) }
+            .setTitle(tr(R.string.admin_approve_title))
+            .setMessage(tr(R.string.admin_approve_message, approval.peer, approval.code))
+            .setPositiveButton(tr(R.string.allow)) { _, _ -> page.resolve(approval, true) }
+            .setNegativeButton(tr(R.string.deny)) { _, _ -> page.resolve(approval, false) }
             .setOnCancelListener { page.resolve(approval, false) }
             .show()
             .also {
@@ -864,13 +883,13 @@ internal class TvActivity : Activity(), Renderer {
     private fun updateBufferingProgress() {
         if (imageState == "TRANSITIONING") {
             bufferingPanel.visibility = View.VISIBLE
-            bufferingText.text = "正在加载图片"
+            bufferingText.text = tr(R.string.loading_image)
             bufferingProgress.isIndeterminate = true
             return
         }
         if (loadingPlaylist) {
             bufferingPanel.visibility = View.VISIBLE
-            bufferingText.text = "正在读取歌曲列表"
+            bufferingText.text = tr(R.string.loading_playlist)
             bufferingProgress.isIndeterminate = true
             return
         }
@@ -881,13 +900,13 @@ internal class TvActivity : Activity(), Renderer {
         val target = loadControl.targetMs
         bufferingProgress.isIndeterminate = target == 0L
         if (target == 0L) {
-            bufferingText.text = "正在缓冲"
+            bufferingText.text = tr(R.string.buffering)
             return
         }
         val buffered = player.totalBufferedDuration.coerceIn(0, target)
         bufferingProgress.max = target.toInt()
         bufferingProgress.progress = buffered.toInt()
-        bufferingText.text = "正在缓冲 · %.1f / %.0f 秒".format(buffered / 1000.0, target / 1000.0)
+        bufferingText.text = tr(R.string.buffering_progress, buffered / 1000.0, target / 1000.0)
     }
 
     private fun updateMusicInfoVisibility() {
@@ -924,17 +943,17 @@ internal class TvActivity : Activity(), Renderer {
         if (waiting) osd.hide()
         status.visibility = if (waiting) View.VISIBLE else View.GONE
         osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), currentTrackUri(),
-            if (player.mediaItemCount <= 1) castTitle else null)
+            if (player.mediaItemCount <= 1) castTitle else null, tr(R.string.cast_media))
         osd.source.text = TvOsd.displaySource(currentTrackUri())
         osd.source.visibility = if (uri.isEmpty()) View.GONE else View.VISIBLE
         osd.playbackState.text = when {
-            waiting -> "等待播放"
-            imageState == "TRANSITIONING" -> "正在加载图片"
-            imageState == "PAUSED_PLAYBACK" -> "已暂停"
-            imageState == "PLAYING" -> "正在显示图片"
-            player.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
-            !player.playWhenReady -> "已暂停"
-            else -> "正在播放"
+            waiting -> tr(R.string.waiting_playback)
+            imageState == "TRANSITIONING" -> tr(R.string.loading_image)
+            imageState == "PAUSED_PLAYBACK" -> tr(R.string.paused)
+            imageState == "PLAYING" -> tr(R.string.showing_image)
+            player.playbackState == Player.STATE_BUFFERING -> tr(R.string.buffering)
+            !player.playWhenReady -> tr(R.string.paused)
+            else -> tr(R.string.playing)
         }
         val showPlaylist = !waiting && player.mediaItemCount > 0 &&
             (playlistLoaded || player.mediaItemCount > 1)
@@ -946,9 +965,9 @@ internal class TvActivity : Activity(), Renderer {
         osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
         musicInfo.update(osd.title.text, osd.playbackState.text, position(), duration())
         if (!waiting) return
-        val error = imageError ?: playlistError ?: player.playerError?.errorCodeName
+        val error = (imageError ?: playlistError)?.let { tr(it) } ?: player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",
-            CastService.status, error?.let { "播放失败 · $it" }).joinToString("\n")
+            CastService.status(this), error?.let { tr(R.string.playback_error, it) }).joinToString("\n")
     }
 
     private fun applyVolume() {
@@ -991,7 +1010,7 @@ internal class TvActivity : Activity(), Renderer {
                     if (imageState == "TRANSITIONING") imageState = "PLAYING"
                 } else {
                     imageState = "STOPPED"
-                    imageError = "图片加载失败（网络、格式或超过 32 MiB）"
+                    imageError = R.string.image_load_error
                 }
                 AppLog.record("TvExoImage", "Image load success=$success state=$imageState")
                 updateStatus()
@@ -1032,7 +1051,7 @@ internal class TvActivity : Activity(), Renderer {
                     player.play()
                 }.onFailure { error ->
                     // Avoid logging exception URLs: playlist links can contain access tokens.
-                    playlistError = "无法读取歌曲列表"
+                    playlistError = R.string.playlist_load_error
                     AppLog.record("TvExoCast", "Playlist load failed: ${error.javaClass.simpleName}")
                 }
                 updateStatus()

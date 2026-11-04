@@ -46,13 +46,13 @@ internal class HttpServer(
             try {
                 workers.execute {
                     client.use {
-                        var phase = "请求行"
+                        var phase = "request line"
                         try {
                             client.soTimeout = 3000
                             val input = client.getInputStream().buffered()
                             val start = line(input, 2048).split(' ')
                             require(start.size == 3 && start[2] in listOf("HTTP/1.0", "HTTP/1.1"))
-                            phase = "请求头"
+                            phase = "headers"
                             val headers = linkedMapOf<String, String>()
                             var bytes = 0
                             while (true) {
@@ -68,7 +68,7 @@ internal class HttpServer(
                                 headers[key] = if (previous == null) value else "$previous; $value"
                             }
                             require("transfer-encoding" !in headers)
-                            phase = "请求正文"
+                            phase = "body"
                             val size = headers["content-length"]?.toInt() ?: 0
                             if (start[1] == "/admin/update" && upload != null) {
                                 val request = HttpRequest(start[0], start[1], headers, byteArrayOf(), client.inetAddress)
@@ -84,15 +84,15 @@ internal class HttpServer(
                                 offset += count
                             }
                             val request = HttpRequest(start[0], start[1], headers, body, client.inetAddress)
-                            phase = "处理请求"
+                            phase = "handler"
                             write(client, handler(request))
                         } catch (error: Exception) {
-                            if (phase == "请求行" && error is java.net.SocketTimeoutException)
+                            if (phase == "request line" && error is java.net.SocketTimeoutException)
                                 return@execute
-                            val status = if (phase == "处理请求") 500 else 400
-                            val detail = if (error is java.net.SocketTimeoutException) "读取超时" else "格式无效或处理失败"
+                            val status = if (phase == "handler") 500 else 400
+                            val detail = if (error is java.net.SocketTimeoutException) "read timeout" else "invalid format or processing failed"
                             runCatching {
-                                write(client, HttpResponse(status, "$phase：$detail",
+                                write(client, HttpResponse(status, "$phase: $detail",
                                     mapOf("Content-Type" to "text/plain; charset=utf-8")))
                             }
                         } finally {

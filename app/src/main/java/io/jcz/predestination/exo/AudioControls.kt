@@ -28,7 +28,9 @@ internal fun audioControls(
             setPadding(12, 8, 12, 8)
         }
         val title = TextView(context).apply { textSize = 18f }
-        fun display(db: Int) { title.text = "$label：${if (db > 0) "+" else ""}$db dB" }
+        fun display(db: Int) {
+            title.text = context.tr(R.string.gain_value, label, "${if (db > 0) "+" else ""}$db")
+        }
         val seek = SeekBar(context).apply {
             this.max = (max - min) / 3
             progress = (value - min) / 3
@@ -73,14 +75,14 @@ internal fun audioControls(
         row.addView(seek, LinearLayout.LayoutParams(-1, -2))
         rows.addView(row)
     }
-    slider("总增益", 0, 18, audio.decibels, totalGain)
+    slider(context.tr(R.string.total_gain), 0, 18, audio.decibels, totalGain)
     for (group in channelGroups(audio.channelCount)) {
-        slider(group.label, -30, 12, audio.channelLevel(group.indices.first())) {
+        slider(context.tr(group.label, group.indices.first() + 1), -30, 12, audio.channelLevel(group.indices.first())) {
             audio.setChannels(group.indices, it)
         }
     }
     val night = CheckBox(context).apply {
-        text = "动态压缩"
+        text = context.tr(R.string.dynamic_compression)
         isChecked = audio.nightMode
         setOnCheckedChangeListener { _, checked ->
             audio.nightMode = checked
@@ -89,10 +91,10 @@ internal fun audioControls(
     }
     rows.addView(night)
     val dialog = AlertDialog.Builder(context)
-        .setTitle("音量增益 · ${audio.channelCount} 声道")
+        .setTitle(context.quantityText(R.plurals.gain_channels, audio.channelCount))
         .setView(ScrollView(context).apply { addView(rows) })
-        .setPositiveButton("完成", null)
-        .setNeutralButton("全部重置", null)
+        .setPositiveButton(context.tr(R.string.done), null)
+        .setNeutralButton(context.tr(R.string.reset_all), null)
         .create()
     dialog.setOnShowListener {
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {

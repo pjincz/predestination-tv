@@ -18,6 +18,7 @@ internal class AdminPage(private val context: Context) {
     private val update = ApkUpdate(context)
     private val bufferSettings = BufferSettings(context)
     private val wallSettings = WallSettings(context)
+    private val languageSettings = LanguageSettings(context)
     private val activityManager = context.getSystemService(ActivityManager::class.java)
     private val appVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
     internal data class Approval(val id: String, val code: String, val peer: String)
@@ -25,7 +26,6 @@ internal class AdminPage(private val context: Context) {
 
     private val random = SecureRandom()
     private var pending: Pending? = null
-
 
     private fun token() = Base64.encodeToString(ByteArray(32).also(random::nextBytes),
         Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE)
@@ -59,9 +59,9 @@ internal class AdminPage(private val context: Context) {
             request.headers["host"] == baseUrl.removePrefix("http://") &&
                 request.headers["origin"] == baseUrl && authenticated(request)
         }
-        if (!authorized) return HttpResponse(403, "请重新登录")
+        if (!authorized) return HttpResponse(403, context.tr(R.string.sign_in_again))
         if (request.headers["content-type"] != "application/vnd.android.package-archive")
-            return HttpResponse(400, "请选择 APK 文件")
+            return HttpResponse(400, context.tr(R.string.choose_apk))
         AppLog.record("TvExoUpdate", "Upload started: $size bytes")
         val result = update.receive(input, size)
         AppLog.record("TvExoUpdate", "Upload result: ${result.status}")
@@ -70,13 +70,13 @@ internal class AdminPage(private val context: Context) {
 
     @Synchronized
     fun handle(request: HttpRequest, baseUrl: String): HttpResponse {
-        if (request.headers["host"] != baseUrl.removePrefix("http://")) return page(403, "地址无效")
+        if (request.headers["host"] != baseUrl.removePrefix("http://")) return page(403, context.tr(R.string.invalid_address))
         if (request.path == "/admin" && request.method == "POST") return saveSettings(request, baseUrl)
-        if (request.method != "GET") return page(405, "请求方法不支持")
-        if (request.headers["sec-fetch-site"] == "cross-site") return page(403, "请直接打开管理员地址")
+        if (request.method != "GET") return page(405, context.tr(R.string.method_unsupported))
+        if (request.headers["sec-fetch-site"] == "cross-site") return page(403, context.tr(R.string.open_admin_directly))
         val now = SystemClock.elapsedRealtime()
         if (request.path == "/admin/logs") {
-            if (!authenticated(request)) return page(403, "请先在电视上授权")
+            if (!authenticated(request)) return page(403, context.tr(R.string.authorize_first))
             return HttpResponse(body = AppLog.read(), headers = mapOf(
                 "Content-Type" to "text/plain; charset=utf-8",
                 "Cache-Control" to "no-store",
@@ -91,12 +91,12 @@ internal class AdminPage(private val context: Context) {
         if (claim != null) {
             if (current == null || current.approval.id != claim || current.expires <= now ||
                 current.approved == false) {
-                return page(403, "授权已拒绝或过期", """<p><a href="/admin">重新请求授权</a></p>""").withCookie(APPROVAL_COOKIE, "", 0)
+                return page(403, context.tr(R.string.approval_expired), """<p><a href="/admin">${xml(context.tr(R.string.request_approval_again))}</a></p>""").withCookie(APPROVAL_COOKIE, "", 0)
             }
             if (current.approved == true) {
                 val session = token()
                 if (!saveSession(session)) {
-                    return page(503, "无法保存授权，请重试")
+                    return page(503, context.tr(R.string.approval_save_error))
                 }
                 pending = null
                 return dashboard().withCookie(SESSION_COOKIE, session, SESSION_SECONDS)
@@ -104,21 +104,12 @@ internal class AdminPage(private val context: Context) {
             return waiting(current.approval)
         }
         if (current != null && current.expires > now && current.approved != false)
-            return page(409, "电视正在处理另一条授权请求")
+            return page(409, context.tr(R.string.approval_busy))
 
         val approval = Approval(token(), (1000 + random.nextInt(9000)).toString(),
             request.peer.hostAddress.orEmpty())
         pending = Pending(approval, now + APPROVAL_SECONDS * 1000L)
         return waiting(approval).withCookie(APPROVAL_COOKIE, approval.id, APPROVAL_SECONDS)
-    }
-
-    fun screenshot(request: HttpRequest, baseUrl: String): HttpResponse {
-        val allowed = synchronized(this) {
-            request.method == "GET" && request.headers["host"] == baseUrl.removePrefix("http://") &&
-                request.headers["sec-fetch-site"] != "cross-site" && authenticated(request)
-        }
-        if (!allowed) return page(403, "请先在电视上授权")
-        return VideoScreenshot.capture()
     }
 
     private fun saveSession(session: String): Boolean {
@@ -132,8 +123,8 @@ internal class AdminPage(private val context: Context) {
             .commit()
     }
 
-    private fun waiting(approval: Approval) = page(200, "等待电视授权", """
-        <p>请在电视上核对配对码 <strong>${approval.code}</strong>，然后用遥控器确认。</p>
+    private fun waiting(approval: Approval) = page(200, context.tr(R.string.waiting_approval), """
+        <p>${xml(context.tr(R.string.check_pairing_code))}<strong>${approval.code}</strong>${xml(context.tr(R.string.confirm_pairing_code))}</p>
         <script>setTimeout(() => location.reload(), 1500);</script>
     """)
 
@@ -142,29 +133,37 @@ internal class AdminPage(private val context: Context) {
 
     private fun saveSettings(request: HttpRequest, baseUrl: String): HttpResponse {
         if (request.headers["origin"] != baseUrl || !authenticated(request))
-            return page(403, "请先在电视上授权")
+            return page(403, context.tr(R.string.authorize_first))
         if (request.headers["content-type"]?.substringBefore(';') != "application/x-www-form-urlencoded" ||
-            request.body.size > 16384) return page(400, "设置格式无效")
+            request.body.size > 16384) return page(400, context.tr(R.string.invalid_settings))
         val fields = runCatching {
             request.body.toString(Charsets.UTF_8).split('&').associate {
                 java.net.URLDecoder.decode(it.substringBefore('='), "UTF-8") to
                     java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8")
             }
-        }.getOrElse { return page(400, "设置格式无效") }
+        }.getOrElse { return page(400, context.tr(R.string.invalid_settings)) }
+        if (fields["settings"] == "language") {
+            val selection = fields["language"]
+            if (selection !in setOf("system", "en", "zh"))
+                return page(400, context.tr(R.string.invalid_settings))
+            if (!languageSettings.save(checkNotNull(selection)))
+                return page(503, context.tr(R.string.save_error))
+            return HttpResponse(303, headers = mapOf("Location" to "/admin", "Cache-Control" to "no-store"))
+        }
         if (fields["settings"] == "wall") {
             val config = runCatching {
                 WallSettings.parse(fields["url"].orEmpty(), fields["zoom"].orEmpty(),
                     fields["refreshSeconds"].orEmpty())
-            }.getOrElse { return page(400, "Wall Page 设置无效，请检查 URL、缩放和刷新间隔") }
-            if (!wallSettings.save(config)) return page(503, "保存失败，请重试")
+            }.getOrElse { return page(400, context.tr(R.string.invalid_wall_settings)) }
+            if (!wallSettings.save(config)) return page(503, context.tr(R.string.save_error))
             return HttpResponse(303, headers = mapOf("Location" to "/admin", "Cache-Control" to "no-store"))
         }
         val memory = fields["memoryMiB"]?.toIntOrNull()
         val seconds = fields["seconds"]?.toIntOrNull()
         if (memory == null || memory !in BufferSettings.memoryRange ||
             seconds == null || seconds !in BufferSettings.durationRange)
-            return page(400, "缓冲设置超出范围")
-        if (!bufferSettings.save(BufferSettings.Limits(memory, seconds))) return page(503, "保存失败，请重试")
+            return page(400, context.tr(R.string.buffer_out_of_range))
+        if (!bufferSettings.save(BufferSettings.Limits(memory, seconds))) return page(503, context.tr(R.string.save_error))
         return HttpResponse(303, headers = mapOf("Location" to "/admin", "Cache-Control" to "no-store"))
     }
 
@@ -173,14 +172,14 @@ internal class AdminPage(private val context: Context) {
         val memory = BufferSettings.memoryRange
         val duration = BufferSettings.durationRange
         return """
-            <h2>HTTP(S) 点播缓冲</h2>
+            <h2>${xml(context.tr(R.string.buffer_heading))}</h2>
             <form action="/admin" method="post">
-                <p><label>最大缓冲内存 <input name="memoryMiB" type="number" required
+                <p><label>${xml(context.tr(R.string.buffer_memory))} <input name="memoryMiB" type="number" required
                     min="${memory.first}" max="${memory.last}" value="${limits.memoryMiB}"> MiB</label></p>
-                <p><label>最大缓冲时长 <input name="seconds" type="number" required
-                    min="${duration.first}" max="${duration.last}" value="${limits.seconds}"> 秒</label></p>
-                <button type="submit">保存缓冲设置</button>
-                <p>下次播放生效。</p>
+                <p><label>${xml(context.tr(R.string.buffer_duration))} <input name="seconds" type="number" required
+                    min="${duration.first}" max="${duration.last}" value="${limits.seconds}"> ${xml(context.tr(R.string.seconds))}</label></p>
+                <button type="submit">${xml(context.tr(R.string.save_buffer))}</button>
+                <p>${xml(context.tr(R.string.next_playback))}</p>
             </form>
         """.trimIndent()
     }
@@ -188,17 +187,17 @@ internal class AdminPage(private val context: Context) {
     private fun deviceInfo(): String {
         val memory = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
         val fields = listOf(
-            "厂商" to Build.MANUFACTURER,
-            "型号" to Build.MODEL,
-            "Android" to "${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）",
-            "设备支持的 ABI" to Build.SUPPORTED_ABIS.joinToString(", "),
-            "系统内存" to "${memory.totalMem / (1024 * 1024)} MiB",
-            "当前可用内存" to "${memory.availMem / (1024 * 1024)} MiB",
-            "应用 Java 堆上限" to "${Runtime.getRuntime().maxMemory() / (1024 * 1024)} MiB",
-            "内部存储可用空间" to "${context.cacheDir.usableSpace / (1024 * 1024)} MiB",
-            "应用版本" to appVersion
+            context.tr(R.string.manufacturer) to Build.MANUFACTURER,
+            context.tr(R.string.model) to Build.MODEL,
+            "Android" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+            context.tr(R.string.supported_abis) to Build.SUPPORTED_ABIS.joinToString(", "),
+            context.tr(R.string.system_memory) to "${memory.totalMem / (1024 * 1024)} MiB",
+            context.tr(R.string.available_memory) to "${memory.availMem / (1024 * 1024)} MiB",
+            context.tr(R.string.java_heap) to "${Runtime.getRuntime().maxMemory() / (1024 * 1024)} MiB",
+            context.tr(R.string.available_storage) to "${context.cacheDir.usableSpace / (1024 * 1024)} MiB",
+            context.tr(R.string.app_version) to appVersion
         )
-        return "<h2>电视信息</h2><table><tbody>" + fields.joinToString("") { (label, value) ->
+        return "<h2>${xml(context.tr(R.string.device_info))}</h2><table><tbody>" + fields.joinToString("") { (label, value) ->
             "<tr><th scope=\"row\">${xml(label)}</th><td>${xml(value)}</td></tr>"
         } + "</tbody></table>"
     }
@@ -211,44 +210,60 @@ internal class AdminPage(private val context: Context) {
                 <input type="hidden" name="settings" value="wall">
                 <p><label>URL <input name="url" type="url" maxlength="4096"
                     value="${xml(config.url)}" placeholder="https://example.com"></label></p>
-                <p><label>Zooming <input name="zoom" type="number" min="0.25" max="5"
+                <p><label>${xml(context.tr(R.string.zoom))} <input name="zoom" type="number" min="0.25" max="5"
                     step="0.01" required value="${config.zoom}"></label></p>
-                <p><label>Refresh interval <input name="refreshSeconds" type="number" min="0"
-                    max="86400" required value="${config.refreshSeconds}"> 秒（0 不刷新）</label></p>
-                <button type="submit">保存 Wall Page</button>
-                <p>URL 留空关闭。等待页空闲 30 秒后显示；配置后停用自动息屏，仍可手动息屏。</p>
-                <p>支持网页触屏和键盘操作；返回逐级后退，最后回到等待页。</p>
+                <p><label>${xml(context.tr(R.string.refresh_interval))} <input name="refreshSeconds" type="number" min="0"
+                    max="86400" required value="${config.refreshSeconds}"> ${xml(context.tr(R.string.refresh_unit))}</label></p>
+                <button type="submit">${xml(context.tr(R.string.save_wall))}</button>
+                <p>${xml(context.tr(R.string.wall_help))}</p>
+                <p>${xml(context.tr(R.string.wall_navigation))}</p>
             </form>
         """.trimIndent()
     }
 
-    private fun dashboard() = page(200, "管理员页面", """
+    private fun languageForm(): String {
+        val selected = languageSettings.read()
+        val choices = listOf("system" to context.tr(R.string.language_system), "en" to "English", "zh" to "中文")
+        val options = choices.joinToString("") { (value, label) ->
+            """<option value="$value"${if (value == selected) " selected" else ""}>${xml(label)}</option>"""
+        }
+        return """
+            <h2>${xml(context.tr(R.string.language))}</h2>
+            <form action="/admin" method="post">
+                <input type="hidden" name="settings" value="language">
+                <label>${xml(context.tr(R.string.language))} <select name="language">$options</select></label>
+                <button type="submit">${xml(context.tr(R.string.save_language))}</button>
+                <p>${xml(context.tr(R.string.language_help))}</p>
+            </form>
+        """.trimIndent()
+    }
+
+    private fun dashboard() = page(200, context.tr(R.string.admin_title), """
+            ${languageForm()}
             ${deviceInfo()}
-            <p><a href="/admin/screenshot" target="_blank" rel="noopener">截取视频画面（PNG）</a></p>
-            <p>截取当前视频，不含 OSD；打开后可保存图片。对比时请暂停在同一帧。</p>
-            ${bufferForm()}
             ${wallForm()}
-            <p><a href="/admin/logs" target="_blank" rel="noopener">查看运行日志</a></p>
-            <h2>上传 APK 更新</h2>
+            ${bufferForm()}
+            <p><a href="/admin/logs" target="_blank" rel="noopener">${xml(context.tr(R.string.view_logs))}</a></p>
+            <h2>${xml(context.tr(R.string.upload_update))}</h2>
             <input id="apk" type="file" accept=".apk">
-            <button id="upload" type="button">上传</button>
+            <button id="upload" type="button">${xml(context.tr(R.string.upload))}</button>
             <p id="upload-status" role="status"></p>
             <script>
                 document.getElementById("upload").onclick = async function () {
                     const file = document.getElementById("apk").files[0];
                     const status = document.getElementById("upload-status");
-                    if (!file) { status.textContent = "请先选择 APK"; return; }
+                    if (!file) { status.textContent = ${org.json.JSONObject.quote(context.tr(R.string.select_apk_first))}; return; }
                     this.disabled = true;
-                    status.textContent = "正在上传";
+                    status.textContent = ${org.json.JSONObject.quote(context.tr(R.string.uploading))};
                     try {
                         const response = await fetch("/admin/update", {
                             method: "POST",
                             headers: {"Content-Type": "application/vnd.android.package-archive"},
                             body: file
                         });
-                        status.textContent = (await response.text()) || "上传失败";
+                        status.textContent = (await response.text()) || ${org.json.JSONObject.quote(context.tr(R.string.upload_failed))};
                     } catch {
-                        status.textContent = "连接中断，请重试";
+                        status.textContent = ${org.json.JSONObject.quote(context.tr(R.string.connection_lost))};
                     } finally {
                         this.disabled = false;
                     }
@@ -258,7 +273,7 @@ internal class AdminPage(private val context: Context) {
 
     private fun page(status: Int, title: String, content: String = "") = HttpResponse(
         status, """
-        <!doctype html><html lang="zh-CN"><meta charset="utf-8">
+        <!doctype html><html lang="${LanguageSettings(context).language()}"><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>$title · Predestination TV Exo</title>
         <style>

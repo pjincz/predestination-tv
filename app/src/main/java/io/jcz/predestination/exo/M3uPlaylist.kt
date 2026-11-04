@@ -23,14 +23,14 @@ internal object M3uPlaylist {
                 else -> {
                     val url = URI(base).resolve(line).toString()
                     Protocol.mediaUri(url)
-                    require(!matches(url)) { "不支持嵌套歌曲列表" }
+                    require(!matches(url)) { "Nested playlists are not supported" }
                     entries.add(Entry(url, title))
-                    require(entries.size <= 10000) { "歌曲列表过长" }
+                    require(entries.size <= 10000) { "Too many playlist entries" }
                     title = null
                 }
             }
         }
-        require(entries.isNotEmpty()) { "歌曲列表为空" }
+        require(entries.isNotEmpty()) { "Empty playlist" }
         return Result(entries)
     }
 
@@ -39,7 +39,7 @@ internal object M3uPlaylist {
         connection.connectTimeout = 15000
         connection.readTimeout = 15000
         try {
-            require(connection.responseCode in 200..299) { "歌曲列表请求失败：HTTP ${connection.responseCode}" }
+            require(connection.responseCode in 200..299) { "Playlist request failed: HTTP ${connection.responseCode}" }
             val bytes = connection.inputStream.use { input ->
                 val output = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(8192)
@@ -47,7 +47,7 @@ internal object M3uPlaylist {
                     if (Thread.currentThread().isInterrupted) throw InterruptedException()
                     val count = input.read(buffer)
                     if (count < 0) break
-                    require(output.size() + count <= 2 * 1024 * 1024) { "歌曲列表过大" }
+                    require(output.size() + count <= 2 * 1024 * 1024) { "Playlist too large" }
                     output.write(buffer, 0, count)
                 }
                 output.toByteArray()

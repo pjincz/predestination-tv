@@ -12,8 +12,6 @@ import android.view.KeyEvent
 import android.view.View
 import android.widget.*
 
-
-
 internal class TvRemoteFrame(context: Context, private val navigate: (KeyEvent) -> Boolean) : FrameLayout(context) {
     private val taps = android.view.GestureDetector(context, object : android.view.GestureDetector.SimpleOnGestureListener() {
         override fun onDown(event: android.view.MotionEvent) = true
@@ -147,6 +145,16 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
         return buttons.getChildAt(index) as Button
     }
 
+    fun addButton(label: Int, action: () -> Unit): Button =
+        addButton(context.tr(label), action).apply { tag = label }
+
+    fun refreshLanguage() {
+        for (index in 0 until buttons.childCount) {
+            val button = buttons.getChildAt(index) as Button
+            (button.tag as? Int)?.let { button.text = context.tr(it) }
+        }
+    }
+
     fun show(seekFocus: Boolean = false) {
         val wasHidden = visibility != VISIBLE
         visibility = VISIBLE
@@ -177,7 +185,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
         if (!dragging) timeline.progress = if (duration > 0 && position.isFinite())
             (position / duration * 1000).toInt().coerceIn(0, 1000) else 0
         clock.text = "${Protocol.time(position)} / ${Protocol.time(duration)}"
-        timeline.contentDescription = if (seekable) "播放进度" else "播放进度，当前不可定位"
+        timeline.contentDescription = if (seekable) context.tr(R.string.playback_progress) else context.tr(R.string.not_seekable)
     }
 
     fun handleKey(event: KeyEvent): Boolean {
@@ -216,20 +224,20 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     }
 
     companion object {
-        fun displayTitle(rawTitle: String?, mediaUrl: String, castTitle: String? = null): String {
+        fun displayTitle(rawTitle: String?, mediaUrl: String, castTitle: String? = null, fallback: String = "Cast media"): String {
             if (!castTitle.isNullOrBlank()) {
-                val clean = displayTitle(castTitle, mediaUrl)
-                if (clean != displaySource(mediaUrl) && clean != "投屏媒体") return clean
+                val clean = displayTitle(castTitle, mediaUrl, fallback = fallback)
+                if (clean != displaySource(mediaUrl) && clean != fallback) return clean
             }
             val title = rawTitle.orEmpty().trim()
             val source = displaySource(mediaUrl)
-            if (title.isEmpty()) return source.ifEmpty { "投屏媒体" }
+            if (title.isEmpty()) return source.ifEmpty { fallback }
             // Do not display signed URL query parameters in the title.
             val urlLike = title.startsWith("http://", true) || title.startsWith("https://", true) ||
                 title.startsWith("rtsp://", true) || title == mediaUrl ||
                 Regex("[?&][A-Za-z0-9_%.-]+=").containsMatchIn(title)
             return if (urlLike) source.ifEmpty { title.substringBefore('?').substringBefore('#') }
-                .ifEmpty { "投屏媒体" } else title
+                .ifEmpty { fallback } else title
         }
 
         fun displaySource(value: String): String = runCatching {

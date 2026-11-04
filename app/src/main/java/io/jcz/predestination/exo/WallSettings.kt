@@ -17,16 +17,16 @@ internal class WallSettings(context: Context) {
     companion object {
         fun parse(url: String, zoom: String, refresh: String): Config {
             val address = url.trim()
-            require(address.length <= 4096) { "URL 过长" }
+            require(address.length <= 4096) { "URL too long" }
             if (address.isNotEmpty()) {
                 val parsed = URI(address)
                 require(parsed.scheme?.lowercase() in listOf("http", "https") &&
-                    !parsed.host.isNullOrEmpty() && parsed.rawUserInfo == null) { "请输入 HTTP(S) 网页地址" }
+                    !parsed.host.isNullOrEmpty() && parsed.rawUserInfo == null) { "Enter an HTTP(S) URL" }
             }
             val scale = zoom.toFloatOrNull()
-            require(scale != null && scale.isFinite() && scale in 0.25f..5f) { "缩放范围为 0.25～5" }
+            require(scale != null && scale.isFinite() && scale in 0.25f..5f) { "Zoom must be between 0.25 and 5" }
             val seconds = refresh.toIntOrNull()
-            require(seconds != null && seconds in 0..86400) { "刷新间隔范围为 0～86400 秒" }
+            require(seconds != null && seconds in 0..86400) { "Refresh interval must be between 0 and 86400 seconds" }
             return Config(address, scale, seconds)
         }
     }

@@ -21,6 +21,7 @@ Predestination TV Exo 是从 **Predestination** 孵化出来的子项目，现�
 通过等待页显示的地址访问 `/admin`，可在浏览器中：
 
 - 查看设备基本信息、可用存储空间和运行日志。
+- 设置界面语言。
 - 设置最大缓冲内存、缓冲时长和 Wall Page。
 - 进行app远程更新。
 

@@ -24,6 +24,7 @@ When idle, it can display a web dashboard or turn off the screen on supported TV
 Visit `/admin` at the address shown on the waiting screen to:
 
 - View basic device information, available storage, and runtime logs.
+- Choose the interface language.
 - Configure maximum buffer memory, buffer duration, and Wall Page.
 - Update the app remotely.
 

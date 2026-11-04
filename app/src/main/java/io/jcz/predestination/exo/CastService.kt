@@ -22,6 +22,7 @@ internal class CastService : Service(), Renderer {
     private var lock: WifiManager.MulticastLock? = null
     private var address: String? = null
     private var registered = false
+    private var statusText: (Context) -> String = { it.tr(R.string.receiver_not_started) }
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) { main.post { connect() } }
@@ -37,10 +38,7 @@ internal class CastService : Service(), Renderer {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        val notifications = getSystemService(NotificationManager::class.java)
-        notifications.createNotificationChannel(NotificationChannel("cast-listener", "投屏接收",
-            NotificationManager.IMPORTANCE_LOW))
-        startForeground(2101, notification())
+        updateNotification()
         connectivity.registerNetworkCallback(NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
@@ -57,12 +55,18 @@ internal class CastService : Service(), Renderer {
 
     override fun onBind(intent: Intent?) = null
 
+    private fun updateNotification() {
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel("cast-listener", tr(R.string.cast_receiver), NotificationManager.IMPORTANCE_LOW))
+        startForeground(2101, notification())
+    }
+
     private fun notification(): Notification {
         val pending = PendingIntent.getActivity(this, 0, Intent(this, TvActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, "cast-listener").setSmallIcon(R.drawable.tv_icon)
-            .setContentTitle("Predestination TV Exo · 投屏接收").setContentText("在应用打开期间接收投屏")
+            .setContentTitle(this.tr(R.string.notification_title)).setContentText(this.tr(R.string.notification_text))
             .setContentIntent(pending).setOngoing(true).build()
     }
 
@@ -83,7 +87,7 @@ internal class CastService : Service(), Renderer {
         if (ip?.hostAddress == address && receiver != null) return
         disconnect()
         if (ip == null) {
-            status = "等待 Wi-Fi 或有线网络"
+            statusText = { context: Context -> context.tr(R.string.waiting_lan) }
             return
         }
         try {
@@ -98,17 +102,17 @@ internal class CastService : Service(), Renderer {
             admin = page
             AppLog.record("TvExoReceiver", "Listening at ${receiver?.baseUrl}")
             address = ip.hostAddress
-            status = "等待投屏 · $address\n管理员页面 · ${receiver?.baseUrl}/admin"
+            statusText = { context: Context -> context.tr(R.string.waiting_cast, address.orEmpty(), receiver?.baseUrl.orEmpty()) }
         } catch (error: Exception) {
             android.util.Log.d("receiver", "Startup failed: ${error.javaClass.simpleName}: ${error.message}")
             android.util.Log.w("TvCast", "Receiver startup failed on ${ip.hostAddress}", error)
             disconnect()
-            status = if (error is java.net.SocketException &&
+            statusText = if (error is java.net.SocketException &&
                 generateSequence<Throwable>(error) { it.cause }.any {
                     it is android.system.ErrnoException && it.errno == android.system.OsConstants.EPERM
                 }) {
-                "系统拒绝局域网访问，请检查 VPN 分应用代理或网络限制"
-            } else "投屏接收启动失败（${error.javaClass.simpleName}），稍后重试"
+                { context: Context -> context.tr(R.string.network_denied) }
+            } else { context: Context -> context.tr(R.string.receiver_error, error.javaClass.simpleName) }
         }
     }
 
@@ -120,7 +124,7 @@ internal class CastService : Service(), Renderer {
         lock?.let { if (it.isHeld) it.release() }
         lock = null
         address = null
-        status = "等待网络"
+        statusText = { context: Context -> context.tr(R.string.waiting_network) }
     }
 
     private fun <T> onMain(block: () -> T): T {
@@ -150,8 +154,10 @@ internal class CastService : Service(), Renderer {
     companion object {
         private var instance: CastService? = null
         private var visiblePlayer: Renderer? = null
-        var status = "接收服务未启动"
-            private set
+        fun status(context: Context): String = instance?.statusText?.invoke(context)
+            ?: context.tr(R.string.receiver_not_started)
+
+        fun refreshLanguage() { instance?.updateNotification() }
 
         fun adminPage() = instance?.admin
 

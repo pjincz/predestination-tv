@@ -12,8 +12,8 @@ internal class ApkUpdate(private val context: Context) {
     @Synchronized
     @Suppress("DEPRECATION")
     fun receive(input: InputStream, size: Int): HttpResponse {
-        if (size !in 1..(128 * 1024 * 1024)) return HttpResponse(400, "APK 最大为 128 MiB")
-        if (pending.exists()) return HttpResponse(409, "已有待安装更新，请先在电视上处理")
+        if (size !in 1..(128 * 1024 * 1024)) return HttpResponse(400, context.tr(R.string.apk_max_size))
+        if (pending.exists()) return HttpResponse(409, context.tr(R.string.update_pending))
         directory.mkdirs()
         val temporary = File.createTempFile("upload-", ".apk", directory)
         try {
@@ -23,9 +23,9 @@ internal class ApkUpdate(private val context: Context) {
                 var remaining = size
                 while (remaining > 0) {
                     if (android.os.SystemClock.elapsedRealtime() >= deadline)
-                        return HttpResponse(400, "APK 上传超时")
+                        return HttpResponse(400, context.tr(R.string.upload_timeout))
                     val count = input.read(buffer, 0, minOf(remaining, buffer.size))
-                    if (count < 0) return HttpResponse(400, "APK 上传不完整")
+                    if (count < 0) return HttpResponse(400, context.tr(R.string.upload_incomplete))
                     output.write(buffer, 0, count)
                     remaining -= count
                 }
@@ -37,10 +37,10 @@ internal class ApkUpdate(private val context: Context) {
                 candidate.versionCode < installed.versionCode ||
                 candidate.signatures.isNullOrEmpty() ||
                 candidate.signatures?.toSet() != installed.signatures?.toSet()) {
-                return HttpResponse(400, "请选择包名和签名相同、版本不低于当前版本的 APK")
+                return HttpResponse(400, context.tr(R.string.apk_mismatch))
             }
-            if (!temporary.renameTo(pending)) return HttpResponse(503, "无法保存更新")
-            return HttpResponse(body = "APK 已收到，请在电视上确认安装")
+            if (!temporary.renameTo(pending)) return HttpResponse(503, context.tr(R.string.update_save_error))
+            return HttpResponse(body = context.tr(R.string.update_received))
         } finally {
             temporary.delete()
         }
