@@ -54,7 +54,8 @@ internal class DlnaReceiver(
 
     private data class Subscription(
         val service: String, val callback: URI, val peer: InetAddress,
-        var expires: Long, var sequence: Long = 0, var last: String = ""
+        var expires: Long, var sequence: Long = 0, var last: String = "",
+        var failures: Int = 0, var retryAt: Long = 0
     )
 
     init {
@@ -148,6 +149,11 @@ internal class DlnaReceiver(
                     android.util.Log.d("DLNA", "${request.peer.hostAddress} ${action.name}")
                     Protocol.validate(service, action)
                     val result = renderer.action(service, action)
+                    if (service == AV && action.name in listOf("GetPositionInfo", "GetTransportInfo")) {
+                        AppLog.record("TvExoEvent", "${action.name} peer=${request.peer.hostAddress} " +
+                            "state=${result["CurrentTransportState"].orEmpty()} " +
+                            "position=${result["RelTime"].orEmpty()} duration=${result["TrackDuration"].orEmpty()}")
+                    }
                     if (service == AV && action.name == "SetAVTransportURI") {
                         val uri = action.args.getValue("CurrentURI")
                         if (uri.isNotEmpty()) {
@@ -166,7 +172,10 @@ internal class DlnaReceiver(
                     HttpResponse(500, Protocol.fault(UpnpError(501, "Action Failed")))
                 }
             }
-            parts[1] == "event" -> subscribe(request, service)
+            parts[1] == "event" -> subscribe(request, service).also {
+                AppLog.record("TvExoEvent", "${request.method} service=${parts[0]} " +
+                    "peer=${request.peer.hostAddress} status=${it.status} active=${subscriptions.size}")
+            }
             else -> HttpResponse(405)
         }
     }
@@ -196,15 +205,25 @@ internal class DlnaReceiver(
             callback.host != request.peer.hostAddress || callback.port !in 1..65535) return HttpResponse(412)
         val newSid = "uuid:${UUID.randomUUID()}"
         subscriptions[newSid] = Subscription(service, callback, request.peer, expires)
+        AppLog.record("TvExoEvent", "Subscribed service=$service peer=${request.peer.hostAddress}:${callback.port}")
         return HttpResponse(headers = mapOf("SID" to newSid, "TIMEOUT" to "Second-300"))
     }
 
     private fun notifySubscribers() {
         val events = mutableMapOf<String, String>()
         subscriptions.entries.forEach { (sid, sub) ->
-            if (System.nanoTime() >= sub.expires) { subscriptions.remove(sid); return@forEach }
+            if (System.nanoTime() >= sub.expires) {
+                subscriptions.remove(sid)
+                AppLog.record("TvExoEvent", "Subscription expired service=${sub.service} peer=${sub.peer.hostAddress}")
+                return@forEach
+            }
+            if (System.nanoTime() < sub.retryAt) return@forEach
             val event = events.getOrPut(sub.service) {
-                renderer.event(sub.service).entries.joinToString("") {
+                val values = try { renderer.event(sub.service) } catch (error: Exception) {
+                    AppLog.record("TvExoEvent", "State read failed: ${error.javaClass.simpleName}")
+                    return@forEach
+                }
+                values.entries.joinToString("") {
                     "<e:property><${it.key}>${xml(it.value)}</${it.key}></e:property>"
                 }
             }
@@ -214,8 +233,8 @@ internal class DlnaReceiver(
                     "$event</e:propertyset>").toByteArray(Charsets.UTF_8)
                 Socket().use { socket ->
                     network?.bindSocket(socket)
-                    socket.connect(InetSocketAddress(sub.peer, sub.callback.port), 500)
-                    socket.soTimeout = 500
+                    socket.connect(InetSocketAddress(sub.peer, sub.callback.port), 1500)
+                    socket.soTimeout = 1500
                     val path = sub.callback.rawPath.ifEmpty { "/" } +
                         (sub.callback.rawQuery?.let { "?$it" } ?: "")
                     val header = "NOTIFY $path HTTP/1.1\r\nHOST: ${sub.callback.rawAuthority}\r\n" +
@@ -225,11 +244,27 @@ internal class DlnaReceiver(
                     socket.getOutputStream().apply { write(header.toByteArray()); write(body); flush() }
                     val response = socket.getInputStream().bufferedReader().readLine().orEmpty()
                     if (!response.startsWith("HTTP/1.1 200") && !response.startsWith("HTTP/1.0 200"))
-                        error("Notification refused")
+                        error("HTTP ${response.split(' ').getOrNull(1).orEmpty()}")
                 }
+                val state = Regex("TransportState val=&quot;([^&]+)&quot;")
+                    .find(event)?.groupValues?.get(1).orEmpty()
+                AppLog.record("TvExoEvent", "NOTIFY accepted peer=${sub.peer.hostAddress} " +
+                    "service=${sub.service} seq=${sub.sequence} state=$state retries=${sub.failures}")
+                sub.failures = 0
+                sub.retryAt = 0
                 sub.last = event
                 sub.sequence = if (sub.sequence == 0xffffffffL) 1 else sub.sequence + 1
-            } catch (_: Exception) { subscriptions.remove(sid) }
+            } catch (error: Exception) {
+                sub.failures++
+                sub.retryAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(
+                    (1L shl sub.failures.coerceAtMost(5)).coerceAtMost(30))
+                // Keep the subscription until expiry: a transient phone/network failure must not
+                // permanently stop pause/seek updates. Log only the first failure and every 10th.
+                if (sub.failures == 1 || sub.failures % 10 == 0)
+                    AppLog.record("TvExoEvent", "NOTIFY failed peer=${sub.peer.hostAddress} " +
+                        "service=${sub.service} seq=${sub.sequence} attempts=${sub.failures} " +
+                        "error=${error.javaClass.simpleName}")
+            }
         }
     }
 
