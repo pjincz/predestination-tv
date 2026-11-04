@@ -63,6 +63,8 @@ internal class TvActivity : Activity(), Renderer {
     private val apkUpdate by lazy { ApkUpdate(applicationContext) }
     private val main = Handler(Looper.getMainLooper())
     private var uri = ""
+    private var pendingOpen: Intent? = null
+    private var externalItems: List<MediaItem> = emptyList()
     private var metadata = ""
     private var castTitle: String? = null
     private var nextUri = ""
@@ -97,6 +99,7 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingOpen = intent.takeIf(ExternalMedia::isOpen)
         screenOffSupported = AudioOnlyMode.supported(this)
         AudioOnlyMode.restore(this)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -192,6 +195,7 @@ internal class TvActivity : Activity(), Renderer {
         super.onStart()
         VideoScreenshot.attach(video.videoSurfaceView as? android.view.SurfaceView)
         if (playerActive) {
+            consumeExternalMedia()
             main.removeCallbacks(refresh)
             refresh.run()
             return
@@ -315,7 +319,35 @@ internal class TvActivity : Activity(), Renderer {
         playerActive = true
         applyVolume()
         CastService.attach(this, this)
+        consumeExternalMedia()
         refresh.run()
+    }
+
+    override fun onNewIntent(incoming: Intent) {
+        super.onNewIntent(incoming)
+        setIntent(incoming)
+        if (ExternalMedia.isOpen(incoming)) {
+            pendingOpen = incoming
+            if (playerActive) consumeExternalMedia()
+        }
+    }
+
+    private fun consumeExternalMedia() {
+        val incoming = pendingOpen ?: return
+        pendingOpen = null
+        runCatching {
+            val items = ExternalMedia.items(this, incoming)
+            require(items.isNotEmpty()) { "不支持此文件或链接" }
+            restoreScreen()
+            setCurrentTransportUri("", "")
+            externalItems = items
+            uri = items.first().localConfiguration!!.uri.toString()
+            startPlayback()
+            AppLog.record("TvExoPlayback", "Opened external media: count=${items.size}")
+        }.onFailure { error ->
+            AppLog.record("TvExoPlayback", "External media failed: ${error.javaClass.simpleName}")
+            Toast.makeText(this, "无法打开文件：${error.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onStop() {
@@ -348,6 +380,7 @@ internal class TvActivity : Activity(), Renderer {
         video.player = null
         player.release()
         playerActive = false
+        externalItems = emptyList()
         uri = ""
         metadata = ""
         castTitle = null
@@ -625,6 +658,7 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun setCurrentTransportUri(next: String, nextMeta: String) {
         if (next.isNotEmpty()) Protocol.mediaUri(next)
+        externalItems = emptyList()
         nextUri = ""
         nextMetadata = ""
         gainDialog?.dismiss()
@@ -842,6 +876,12 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun startPlayback() {
         if (loadingPlaylist) return
+        if (externalItems.isNotEmpty()) {
+            player.setMediaItems(externalItems)
+            player.prepare()
+            player.play()
+            return
+        }
         if (CastImage.matches(uri, metadata)) {
             stopPlayback()
             imageState = "TRANSITIONING"
