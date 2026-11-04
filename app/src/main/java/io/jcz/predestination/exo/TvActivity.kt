@@ -46,6 +46,8 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var artworkView: android.widget.ImageView
     private lateinit var artwork: CastArtwork
     private var hasArtwork = false
+    private lateinit var musicInfo: MusicInfo
+    private var musicMode = false
     private lateinit var osd: TvOsd
     private lateinit var status: TextView
     private lateinit var loadControl: RebufferLoadControl
@@ -66,7 +68,8 @@ internal class TvActivity : Activity(), Renderer {
     private var muted = false
     private val audioGain = AudioGain()
     private var gainDialog: AlertDialog? = null
-    private val backExit = BackExit()
+    private var exitDialog: AlertDialog? = null
+    private var lastBackAt: Long? = null
     private var exitHint: Toast? = null
     private var playerActive = false
     private var sleeping = false
@@ -108,8 +111,6 @@ internal class TvActivity : Activity(), Renderer {
         artworkView = android.widget.ImageView(this).apply {
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(android.graphics.Color.BLACK)
-            val padding = (32 * resources.displayMetrics.density).toInt()
-            setPadding(padding, padding, padding, padding)
             visibility = View.GONE
         }
         artwork = CastArtwork { bitmap ->
@@ -117,6 +118,7 @@ internal class TvActivity : Activity(), Renderer {
             artworkView.setImageBitmap(bitmap)
             if (bitmap == null) artworkView.visibility = View.GONE
         }
+        musicInfo = MusicInfo(this)
         osd = TvOsd(this).apply {
             toggle = { togglePlayback() }
             seek = { seconds -> seekFromOsd(position() + seconds) }
@@ -175,10 +177,11 @@ internal class TvActivity : Activity(), Renderer {
             addView(artworkView, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+            addView(musicInfo, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
             addView(osd, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
             addView(sleepCountdown, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
-        osd.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateMusicBounds() }
+        osd.visibilityChanged = ::updateMusicInfoVisibility
     }
 
     override fun onStart() {
@@ -312,6 +315,8 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        exitHint?.cancel()
+        lastBackAt = null
         VideoScreenshot.attach(null)
         musicBackground.setPlaying(false)
         if (sleeping && !isFinishing) {
@@ -320,10 +325,9 @@ internal class TvActivity : Activity(), Renderer {
             return
         }
         cancelPlaylist()
-        backExit.reset()
         artwork.clear()
-        exitHint?.cancel()
-        osd.pinned = false
+        exitDialog?.dismiss()
+        exitDialog = null
         osd.hide()
         gainDialog?.dismiss()
         gainDialog = null
@@ -396,12 +400,13 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun restoreScreen() {
+        exitHint?.cancel()
+        lastBackAt = null
         sleeping = false
         AudioOnlyMode.restore(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         idleScreenTimer.reset()
         sleepCountdown.visibility = View.GONE
-        backExit.reset()
         if (playerActive) updateStatus()
     }
 
@@ -409,7 +414,7 @@ internal class TvActivity : Activity(), Renderer {
         if (sleeping) return
         val eligible = screenOffSupported && AudioOnlyMode.enabled(this) && resumed &&
             hasWindowFocus() && adminDialog?.isShowing != true && updateDialog?.isShowing != true &&
-            gainDialog?.isShowing != true && isWaiting()
+            gainDialog?.isShowing != true && exitDialog?.isShowing != true && isWaiting()
         val now = android.os.SystemClock.elapsedRealtime()
         val due = idleScreenTimer.update(now, eligible)
         val seconds = idleScreenTimer.countdownSeconds(now)
@@ -422,7 +427,6 @@ internal class TvActivity : Activity(), Renderer {
         if (!screenOffSupported || sleeping) return
         sleeping = true
         sleepCountdown.visibility = View.GONE
-        osd.pinned = false
         osd.hide()
         musicBackground.setPlaying(false)
         if (android.os.Build.VERSION.SDK_INT >= 27) setTurnScreenOn(false)
@@ -461,23 +465,67 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun handleBack() {
         if (sleeping) { restoreScreen(); return }
-        val topLevel = osd.pinned || osd.visibility != View.VISIBLE
-        val shouldExit = backExit.onBack(topLevel, android.os.SystemClock.elapsedRealtime())
-        exitHint?.cancel()
-        if (!topLevel) {
-            osd.hide()
-        } else if (shouldExit) {
-            finish()
-        } else {
-            exitHint = Toast.makeText(this, "双击返回键退出app", Toast.LENGTH_SHORT).also { it.show() }
+        val now = android.os.SystemClock.elapsedRealtime()
+        val previous = lastBackAt
+        lastBackAt = now
+        if (previous != null && now - previous in 0L..500L) {
+            exitApp()
+            return
         }
+        exitHint?.cancel()
+        if (exitDialog?.isShowing == true) {
+            exitDialog?.dismiss()
+            return
+        }
+        exitHint = Toast.makeText(this, "双击返回键退出app", Toast.LENGTH_SHORT).also { it.show() }
+        idleScreenTimer.reset()
+        osd.hide()
+        val actions = buildList<Pair<String, () -> Unit>> {
+            if (!isWaiting()) add("停止播放" to { stopPlayback() })
+            add("息屏" to {
+                if (screenOffSupported) enterScreenOff()
+                else Toast.makeText(this@TvActivity, "此设备不支持息屏", Toast.LENGTH_SHORT).show()
+            })
+            add("退出" to { exitApp() })
+            add("取消" to {})
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val padding = (16 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("退出确认").setView(row).create()
+        actions.forEach { (label, action) ->
+            row.addView(android.widget.Button(this).apply {
+                text = label
+                isFocusable = true
+                setOnClickListener {
+                    dialog.dismiss()
+                    action()
+                }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        exitDialog = dialog
+        dialog.setOnDismissListener {
+            exitDialog = null
+            idleScreenTimer.reset()
+        }
+        dialog.show()
+        trackDialogBack(dialog)
+        row.getChildAt(0).requestFocus()
+    }
+
+    private fun exitApp() {
+        exitDialog?.dismiss()
+        stopPlayback()
+        restoreScreen()
+        finishAndRemoveTask()
     }
 
     @android.annotation.SuppressLint("GestureBackNavigation") // API 33+ callback is also registered below.
     private fun trackDialogBack(dialog: AlertDialog) {
         fun cancelFromBack() {
-            backExit.onBack(false, android.os.SystemClock.elapsedRealtime())
-            dialog.cancel()
+            if (dialog === exitDialog) handleBack() else dialog.cancel()
         }
         dialog.setOnKeyListener { _, key, event ->
             if (key != KeyEvent.KEYCODE_BACK) false
@@ -685,14 +733,11 @@ internal class TvActivity : Activity(), Renderer {
         bufferingText.text = "正在缓冲 · %.1f / %.0f 秒".format(buffered / 1000.0, target / 1000.0)
     }
 
-    private fun updateMusicBounds() {
-        val bottom = if (osd.pinned) osd.height else 0
-        for (view in listOf(musicBackground, artworkView)) {
-            val params = view.layoutParams as FrameLayout.LayoutParams
-            if (params.bottomMargin != bottom) {
-                params.bottomMargin = bottom
-                view.layoutParams = params
-            }
+    private fun updateMusicInfoVisibility() {
+        musicInfo.visibility = when {
+            !musicMode -> View.GONE
+            osd.visibility == View.VISIBLE -> View.GONE
+            else -> View.VISIBLE
         }
     }
 
@@ -708,8 +753,10 @@ internal class TvActivity : Activity(), Renderer {
         val tracks = player.currentTracks
         val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
             !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
-        osd.pinned = !waiting && audioOnly
-        updateMusicBounds()
+        val wasMusic = musicMode
+        musicMode = !waiting && audioOnly
+        if (musicMode && !wasMusic) osd.hide()
+        updateMusicInfoVisibility()
         val showArtwork = !waiting && audioOnly && hasArtwork && player.mediaItemCount <= 1
         artworkView.visibility = if (showArtwork) View.VISIBLE else View.GONE
         val showRecord = !waiting && audioOnly && !showArtwork
@@ -728,6 +775,7 @@ internal class TvActivity : Activity(), Renderer {
             else -> "正在播放"
         }
         osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
+        musicInfo.update(osd.title.text, osd.playbackState.text, position(), duration())
         if (!waiting) return
         val error = playlistError ?: player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",

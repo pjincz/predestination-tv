@@ -92,12 +92,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     private val timeout = Runnable { hide() }
     private var lastButton = 0
     private var dragging = false
-    var pinned = false
-        set(value) {
-            if (field == value) return
-            field = value
-            if (value) show() else touch()
-        }
+    var visibilityChanged: () -> Unit = {}
 
     init {
         orientation = VERTICAL
@@ -154,21 +149,23 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     fun show(seekFocus: Boolean = false) {
         val wasHidden = visibility != VISIBLE
         visibility = VISIBLE
+        if (wasHidden) visibilityChanged()
         if (seekFocus) timeline.requestFocus()
         else if (wasHidden || !hasFocus()) buttons.getChildAt(lastButton)?.requestFocus()
         touch()
     }
 
     fun hide() {
-        if (pinned) return
+        val wasVisible = visibility == VISIBLE
         handler.removeCallbacks(timeout)
         clearFocus()
         visibility = GONE
+        if (wasVisible) visibilityChanged()
     }
 
     private fun touch() {
         handler.removeCallbacks(timeout)
-        if (visibility == VISIBLE && !pinned) handler.postDelayed(timeout, 10000)
+        if (visibility == VISIBLE) handler.postDelayed(timeout, 10000)
     }
 
     fun updateProgress(position: Double, duration: Double, seekable: Boolean) {
