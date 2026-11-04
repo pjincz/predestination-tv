@@ -60,6 +60,8 @@ internal class TvActivity : Activity(), Renderer {
     private var uri = ""
     private var metadata = ""
     private var castTitle: String? = null
+    private var nextUri = ""
+    private var nextMetadata = ""
     private var volume = 100
     private var muted = false
     private val audioGain = AudioGain()
@@ -271,6 +273,14 @@ internal class TvActivity : Activity(), Renderer {
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_ENDED && nextUri.isNotEmpty()) {
+                        // Defer player mutation until this event batch has finished.
+                        val finishedItem = player.currentMediaItem
+                        main.post {
+                            if (playerActive && player.playbackState == Player.STATE_ENDED &&
+                                player.currentMediaItem === finishedItem) playNextTransportUri()
+                        }
+                    }
                     val label = when (playbackState) {
                         Player.STATE_BUFFERING -> "buffering"
                         Player.STATE_READY -> "ready"
@@ -536,8 +546,34 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun skipTrack(next: Boolean): Boolean {
         if (next && player.hasNextMediaItem()) player.seekToNextMediaItem()
+        else if (next && nextUri.isNotEmpty()) return playNextTransportUri()
         else if (!next && player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
         else return false
+        return true
+    }
+
+    private fun setCurrentTransportUri(next: String, nextMeta: String) {
+        if (next.isNotEmpty()) Protocol.mediaUri(next)
+        nextUri = ""
+        nextMetadata = ""
+        gainDialog?.dismiss()
+        gainDialog = null
+        audioGain.resetChannels()
+        audioGain.nightMode = false
+        setAudioGain(0)
+        uri = next
+        metadata = nextMeta
+        castTitle = CastTitle.parse(metadata)
+        stopPlayback()
+    }
+
+    private fun playNextTransportUri(): Boolean {
+        if (nextUri.isEmpty()) return false
+        val target = nextUri
+        val targetMetadata = nextMetadata
+        setCurrentTransportUri(target, targetMetadata)
+        startPlayback()
+        AppLog.record("TvExoCast", "Advanced to supplied next transport URI")
         return true
     }
 
@@ -768,7 +804,7 @@ internal class TvActivity : Activity(), Renderer {
             add("Stop")
             if (state() in listOf("PLAYING", "TRANSITIONING")) add("Pause")
             if (player.isCurrentMediaItemSeekable) add("Seek")
-            if (player.hasNextMediaItem()) add("Next")
+            if (player.hasNextMediaItem() || nextUri.isNotEmpty()) add("Next")
             if (player.hasPreviousMediaItem()) add("Previous")
         }.joinToString(",")
     }
@@ -786,17 +822,16 @@ internal class TvActivity : Activity(), Renderer {
         }
         return when (action.name) {
             "SetAVTransportURI" -> {
-                val next = args.getValue("CurrentURI")
+                setCurrentTransportUri(args.getValue("CurrentURI"), args.getValue("CurrentURIMetaData"))
+                emptyMap()
+            }
+            "SetNextAVTransportURI" -> {
+                val next = args.getValue("NextURI")
                 if (next.isNotEmpty()) Protocol.mediaUri(next)
-                gainDialog?.dismiss()
-                gainDialog = null
-                audioGain.resetChannels()
-                audioGain.nightMode = false
-                setAudioGain(0)
-                uri = next
-                metadata = args.getValue("CurrentURIMetaData")
-                castTitle = CastTitle.parse(metadata)
-                stopPlayback()
+                nextUri = next
+                nextMetadata = if (next.isEmpty()) "" else args.getValue("NextURIMetaData")
+                AppLog.record("TvExoCast", "SetNextAVTransportURI present=${next.isNotEmpty()} " +
+                    "metadata=${nextMetadata.isNotBlank()}")
                 emptyMap()
             }
             "Play" -> {
@@ -843,7 +878,7 @@ internal class TvActivity : Activity(), Renderer {
                 "RelCount" to "2147483647", "AbsCount" to "2147483647")
             "GetMediaInfo" -> mapOf("NrTracks" to if (uri.isEmpty()) "0" else player.mediaItemCount.coerceAtLeast(1).toString(),
                 "MediaDuration" to Protocol.time(duration()), "CurrentURI" to uri,
-                "CurrentURIMetaData" to metadata, "NextURI" to "", "NextURIMetaData" to "",
+                "CurrentURIMetaData" to metadata, "NextURI" to nextUri, "NextURIMetaData" to nextMetadata,
                 "PlayMedium" to "NETWORK", "RecordMedium" to "NOT_IMPLEMENTED", "WriteStatus" to "NOT_IMPLEMENTED")
             "GetDeviceCapabilities" -> mapOf("PlayMedia" to "NETWORK", "RecMedia" to "NOT_IMPLEMENTED",
                 "RecQualityModes" to "NOT_IMPLEMENTED")
@@ -882,6 +917,7 @@ internal class TvActivity : Activity(), Renderer {
         val values = if (service == AV) mapOf("TransportState" to state(), "TransportStatus" to transportStatus(),
             "CurrentTrackURI" to currentTrackUri(),
             "AVTransportURI" to uri, "CurrentTrackMetaData" to metadata,
+            "NextAVTransportURI" to nextUri, "NextAVTransportURIMetaData" to nextMetadata,
             "CurrentTrackDuration" to Protocol.time(duration()), "CurrentTransportActions" to
                 transportActions())
         else mapOf("Volume" to volume.toString(),

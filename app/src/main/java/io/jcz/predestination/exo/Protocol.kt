@@ -88,6 +88,7 @@ internal object Protocol {
     val actions = mapOf(
         AV to mapOf(
             "SetAVTransportURI" to "InstanceID:i:Id CurrentURI:i:Uri CurrentURIMetaData:i:Metadata",
+            "SetNextAVTransportURI" to "InstanceID:i:Id NextURI:i:Uri NextURIMetaData:i:Metadata",
             "Play" to "InstanceID:i:Id Speed:i:Speed",
             "Pause" to "InstanceID:i:Id", "Stop" to "InstanceID:i:Id",
             "Next" to "InstanceID:i:Id", "Previous" to "InstanceID:i:Id",

@@ -8,6 +8,7 @@ class ReceiverRouterTest {
         val calls = mutableListOf<SoapAction>()
 
         override fun action(service: String, action: SoapAction): Map<String, String> {
+            if (action.name == "GetMediaInfo") return emptyMap()
             calls.add(action)
             return emptyMap()
         }
@@ -90,5 +91,39 @@ class ReceiverRouterTest {
             router.action(AV, SoapAction("Play", mapOf("InstanceID" to "0", "Speed" to "2")))
         }
         assertEquals(0, opens)
+    }
+
+    @Test fun nextUriCanBeReplacedClearedAndTransferredBeforePlay() {
+        val router = ReceiverRouter { }
+        load(router)
+        fun next(uri: String) = router.action(AV, SoapAction("SetNextAVTransportURI", mapOf(
+            "InstanceID" to "0", "NextURI" to uri, "NextURIMetaData" to "next title")))
+        fun info() = router.action(AV, SoapAction("GetMediaInfo", mapOf("InstanceID" to "0")))
+        assertTrue(Protocol.scpd(AV).contains("SetNextAVTransportURI"))
+        next("http://example.com/old.mp3")
+        next("http://example.com/next.mp3")
+        assertEquals("http://example.com/next.mp3", info()["NextURI"])
+        assertEquals("next title", info()["NextURIMetaData"])
+        assertThrows(UpnpError::class.java) { next("file:///private") }
+        assertEquals("http://example.com/next.mp3", info()["NextURI"])
+        next("")
+        assertEquals("", info()["NextURI"])
+        assertEquals("", info()["NextURIMetaData"])
+        next("http://example.com/next.mp3")
+        play(router)
+        val player = Player()
+        router.attach(player)
+        assertEquals(listOf("SetAVTransportURI", "SetNextAVTransportURI", "Play"), player.calls.map { it.name })
+        assertEquals("next title", player.calls[1].args["NextURIMetaData"])
+    }
+
+    @Test fun replacingCurrentClearsPendingNext() {
+        val router = ReceiverRouter { }
+        load(router)
+        router.action(AV, SoapAction("SetNextAVTransportURI", mapOf("InstanceID" to "0",
+            "NextURI" to "http://example.com/next.mp3", "NextURIMetaData" to "title")))
+        load(router, "http://example.com/new.mp3")
+        val info = router.action(AV, SoapAction("GetMediaInfo", mapOf("InstanceID" to "0")))
+        assertEquals("", info["NextURI"])
     }
 }

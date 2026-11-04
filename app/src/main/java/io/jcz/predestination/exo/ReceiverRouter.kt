@@ -6,6 +6,9 @@ internal class ReceiverRouter(private val openPlayer: () -> Unit) : Renderer {
     private var previous = java.lang.ref.WeakReference<Renderer>(null)
     private var uri = ""
     private var metadata = ""
+    private var nextUri = ""
+    private var nextMetadata = ""
+    private var nextChanged = false
     private var changed = false
     private var playPending = false
     private var volume: String? = null
@@ -19,6 +22,11 @@ internal class ReceiverRouter(private val openPlayer: () -> Unit) : Renderer {
                 "CurrentURI" to uri, "CurrentURIMetaData" to metadata)))
             changed = false
         }
+        if (nextChanged || (previous.get() !== target && nextUri.isNotEmpty())) {
+            target.action(AV, SoapAction("SetNextAVTransportURI", mapOf("InstanceID" to "0",
+                "NextURI" to nextUri, "NextURIMetaData" to nextMetadata)))
+            nextChanged = false
+        }
         previous = java.lang.ref.WeakReference(target)
         volume?.let { target.action(RC, SoapAction("SetVolume", mapOf("InstanceID" to "0",
             "Channel" to "Master", "DesiredVolume" to it))) }
@@ -30,7 +38,15 @@ internal class ReceiverRouter(private val openPlayer: () -> Unit) : Renderer {
         }
     }
 
-    fun detach(target: Renderer) { if (player === target) player = null }
+    fun detach(target: Renderer) {
+        if (player !== target) return
+        val info = target.action(AV, SoapAction("GetMediaInfo", mapOf("InstanceID" to "0")))
+        uri = info["CurrentURI"] ?: uri
+        metadata = info["CurrentURIMetaData"] ?: metadata
+        nextUri = info["NextURI"].orEmpty()
+        nextMetadata = info["NextURIMetaData"].orEmpty()
+        player = null
+    }
 
     override fun action(service: String, action: SoapAction): Map<String, String> {
         Protocol.validate(service, action)
@@ -54,8 +70,20 @@ internal class ReceiverRouter(private val openPlayer: () -> Unit) : Renderer {
             player?.action(service, action)
             uri = next
             metadata = action.args.getValue("CurrentURIMetaData")
+            nextUri = ""
+            nextMetadata = ""
+            nextChanged = false
             changed = player == null
             playPending = false
+            return emptyMap()
+        }
+        if (action.name == "SetNextAVTransportURI") {
+            val next = action.args.getValue("NextURI")
+            if (next.isNotEmpty()) Protocol.mediaUri(next)
+            player?.action(service, action)
+            nextUri = next
+            nextMetadata = if (next.isEmpty()) "" else action.args.getValue("NextURIMetaData")
+            nextChanged = player == null
             return emptyMap()
         }
         player?.let { return it.action(service, action) }
@@ -78,7 +106,7 @@ internal class ReceiverRouter(private val openPlayer: () -> Unit) : Renderer {
                 "AbsCount" to "2147483647")
             "GetMediaInfo" -> mapOf("NrTracks" to if (uri.isEmpty()) "0" else "1",
                 "MediaDuration" to "00:00:00", "CurrentURI" to uri, "CurrentURIMetaData" to metadata,
-                "NextURI" to "", "NextURIMetaData" to "", "PlayMedium" to "NETWORK",
+                "NextURI" to nextUri, "NextURIMetaData" to nextMetadata, "PlayMedium" to "NETWORK",
                 "RecordMedium" to "NOT_IMPLEMENTED", "WriteStatus" to "NOT_IMPLEMENTED")
             "GetCurrentTransportActions" -> mapOf("Actions" to if (uri.isEmpty()) "" else "Play,Stop")
             "GetDeviceCapabilities" -> mapOf("PlayMedia" to "NETWORK", "RecMedia" to "NOT_IMPLEMENTED",
