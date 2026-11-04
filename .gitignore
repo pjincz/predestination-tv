@@ -1,4 +1,15 @@
 .gradle/
+.kotlin/
 local.properties
 **/build/
 *~
+
+# Local release signing material (never commit).
+/signing/*
+!/signing/README.md
+**/*.jks
+**/*.keystore
+**/*.p12
+**/*.pfx
+**/keystore.properties
+**/key.properties
