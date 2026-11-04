@@ -43,6 +43,9 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
     private lateinit var musicBackground: MusicBackgroundView
+    private lateinit var artworkView: android.widget.ImageView
+    private lateinit var artwork: CastArtwork
+    private var hasArtwork = false
     private lateinit var osd: TvOsd
     private lateinit var status: TextView
     private lateinit var loadControl: RebufferLoadControl
@@ -56,12 +59,20 @@ internal class TvActivity : Activity(), Renderer {
     private val main = Handler(Looper.getMainLooper())
     private var uri = ""
     private var metadata = ""
+    private var castTitle: String? = null
     private var volume = 100
     private var muted = false
     private val audioGain = AudioGain()
     private var gainDialog: AlertDialog? = null
     private val backExit = BackExit()
     private var exitHint: Toast? = null
+    private var playerActive = false
+    private var sleeping = false
+    private var resumed = false
+    private var screenOffSupported = false
+    private val wakeKeys = WakeKeyFilter()
+    private val idleScreenTimer = IdleScreenTimer()
+    private lateinit var sleepCountdown: TextView
     private val playlistExecutor = java.util.concurrent.Executors.newCachedThreadPool()
     private var playlistTask: java.util.concurrent.Future<*>? = null
     private var playlistGeneration = 0
@@ -71,12 +82,15 @@ internal class TvActivity : Activity(), Renderer {
     private val refresh = object : Runnable {
         override fun run() {
             updateStatus()
+            checkIdleScreen()
             main.postDelayed(this, 1000)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        screenOffSupported = AudioOnlyMode.supported(this)
+        AudioOnlyMode.restore(this)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
@@ -89,6 +103,18 @@ internal class TvActivity : Activity(), Renderer {
         musicBackground = MusicBackgroundView(this).apply {
             visibility = View.GONE
         }
+        artworkView = android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(android.graphics.Color.BLACK)
+            val padding = (32 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+            visibility = View.GONE
+        }
+        artwork = CastArtwork { bitmap ->
+            hasArtwork = bitmap != null
+            artworkView.setImageBitmap(bitmap)
+            if (bitmap == null) artworkView.visibility = View.GONE
+        }
         osd = TvOsd(this).apply {
             toggle = { togglePlayback() }
             seek = { seconds -> seekFromOsd(position() + seconds) }
@@ -100,6 +126,15 @@ internal class TvActivity : Activity(), Renderer {
             addButton("字幕") { showTracks(C.TRACK_TYPE_TEXT) }
             addButton("音轨") { showTracks(C.TRACK_TYPE_AUDIO) }
             addButton("音量增益") { showGainDialog() }
+            if (screenOffSupported) {
+                addButton("息屏听音") { enterScreenOff() }
+                addButton("空闲息屏") {
+                    val enabled = AudioOnlyMode.toggle(this@TvActivity)
+                    idleScreenTimer.reset()
+                    Toast.makeText(this@TvActivity, if (enabled) "等待页空闲 30 秒自动息屏"
+                        else "已关闭空闲自动息屏", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
         status = TextView(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
@@ -111,6 +146,12 @@ internal class TvActivity : Activity(), Renderer {
             textSize = 22f
         }
         bufferingProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
+        sleepCountdown = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 20f
+            setPadding(16, 16, 16, 24)
+            visibility = View.GONE
+        }
         bufferingPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 16, 24, 16)
@@ -129,9 +170,11 @@ internal class TvActivity : Activity(), Renderer {
             }
             addView(video, FrameLayout.LayoutParams(-1, -1))
             addView(musicBackground, FrameLayout.LayoutParams(-1, -1))
+            addView(artworkView, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
             addView(osd, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            addView(sleepCountdown, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
         osd.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateMusicBounds() }
     }
@@ -139,6 +182,11 @@ internal class TvActivity : Activity(), Renderer {
     override fun onStart() {
         super.onStart()
         VideoScreenshot.attach(video.videoSurfaceView as? android.view.SurfaceView)
+        if (playerActive) {
+            main.removeCallbacks(refresh)
+            refresh.run()
+            return
+        }
         setAudioGain(0)
         val renderers = object : NextRenderersFactory(this@TvActivity) {
             override fun buildAudioSink(
@@ -169,6 +217,7 @@ internal class TvActivity : Activity(), Renderer {
             }
         loadControl = RebufferLoadControl(BufferSettings(applicationContext))
         player = ExoPlayer.Builder(this).setRenderersFactory(subtitleRenderers)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setSubtitleParserFactory(subtitleParsers))
             .setLoadControl(loadControl).build().apply {
             setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -246,6 +295,7 @@ internal class TvActivity : Activity(), Renderer {
             })
         }
         video.player = player
+        playerActive = true
         applyVolume()
         CastService.attach(this, this)
         refresh.run()
@@ -254,8 +304,14 @@ internal class TvActivity : Activity(), Renderer {
     override fun onStop() {
         VideoScreenshot.attach(null)
         musicBackground.setPlaying(false)
+        if (sleeping && !isFinishing) {
+            AppLog.record("TvExoScreen", "Screen off: keeping playback and cast receiver active")
+            super.onStop()
+            return
+        }
         cancelPlaylist()
         backExit.reset()
+        artwork.clear()
         exitHint?.cancel()
         osd.pinned = false
         osd.hide()
@@ -270,14 +326,106 @@ internal class TvActivity : Activity(), Renderer {
         CastService.detach(this, this)
         video.player = null
         player.release()
+        playerActive = false
         uri = ""
         metadata = ""
+        castTitle = null
         super.onStop()
     }
 
     override fun onDestroy() {
+        artwork.close()
+        AudioOnlyMode.restore(this)
+        main.removeCallbacks(refresh)
+        if (playerActive) {
+            cancelPlaylist()
+            CastService.detach(this, this)
+            video.player = null
+            player.release()
+            playerActive = false
+        }
         playlistExecutor.shutdownNow()
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        if (!sleeping) restoreScreen()
+    }
+
+    override fun onPause() {
+        resumed = false
+        super.onPause()
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        idleScreenTimer.reset()
+        sleepCountdown.visibility = View.GONE
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (wakeKeys.consume(event, sleeping)) {
+            if (sleeping) restoreScreen()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private var wakingTouch = false
+
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (sleeping || wakingTouch) {
+            if (sleeping) restoreScreen()
+            wakingTouch = event.actionMasked != android.view.MotionEvent.ACTION_UP &&
+                event.actionMasked != android.view.MotionEvent.ACTION_CANCEL
+            return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    private fun restoreScreen() {
+        sleeping = false
+        AudioOnlyMode.restore(this)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        idleScreenTimer.reset()
+        sleepCountdown.visibility = View.GONE
+        backExit.reset()
+        if (playerActive) updateStatus()
+    }
+
+    private fun checkIdleScreen() {
+        if (sleeping) return
+        val eligible = screenOffSupported && AudioOnlyMode.enabled(this) && resumed &&
+            hasWindowFocus() && adminDialog?.isShowing != true && updateDialog?.isShowing != true &&
+            gainDialog?.isShowing != true && isWaiting()
+        val now = android.os.SystemClock.elapsedRealtime()
+        val due = idleScreenTimer.update(now, eligible)
+        val seconds = idleScreenTimer.countdownSeconds(now)
+        sleepCountdown.visibility = if (seconds == null) View.GONE else View.VISIBLE
+        if (seconds != null) sleepCountdown.text = "${seconds} 秒后息屏\n按任意键取消 · 投屏自动亮屏"
+        if (due) enterScreenOff()
+    }
+
+    private fun enterScreenOff() {
+        if (!screenOffSupported || sleeping) return
+        sleeping = true
+        sleepCountdown.visibility = View.GONE
+        osd.pinned = false
+        osd.hide()
+        musicBackground.setPlaying(false)
+        if (android.os.Build.VERSION.SDK_INT >= 27) setTurnScreenOn(false)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+        AppLog.record("TvExoScreen", "Entering audio-only screen-off mode")
+        AudioOnlyMode.set(this, true) { success ->
+            if (!success && sleeping && !isDestroyed) {
+                screenOffSupported = false
+                restoreScreen()
+                Toast.makeText(this, "息屏失败，本次已停用", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -302,6 +450,7 @@ internal class TvActivity : Activity(), Renderer {
     override fun onBackPressed() = handleBack()
 
     private fun handleBack() {
+        if (sleeping) { restoreScreen(); return }
         val topLevel = osd.pinned || osd.visibility != View.VISIBLE
         val shouldExit = backExit.onBack(topLevel, android.os.SystemClock.elapsedRealtime())
         exitHint?.cancel()
@@ -399,6 +548,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun stopPlayback() {
+        artwork.clear()
         cancelPlaylist()
         player.stop()
         player.clearMediaItems()
@@ -500,17 +650,20 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun updateMusicBounds() {
-        val params = musicBackground.layoutParams as FrameLayout.LayoutParams
         val bottom = if (osd.pinned) osd.height else 0
-        if (params.bottomMargin != bottom) {
-            params.bottomMargin = bottom
-            musicBackground.layoutParams = params
+        for (view in listOf(musicBackground, artworkView)) {
+            val params = view.layoutParams as FrameLayout.LayoutParams
+            if (params.bottomMargin != bottom) {
+                params.bottomMargin = bottom
+                view.layoutParams = params
+            }
         }
     }
 
     private fun isWaiting() = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
 
     private fun updateStatus() {
+        if (sleeping) return
         updateAdminApproval()
         confirmUpdate()
         updateBufferingProgress()
@@ -521,11 +674,15 @@ internal class TvActivity : Activity(), Renderer {
             !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
         osd.pinned = !waiting && audioOnly
         updateMusicBounds()
-        musicBackground.visibility = if (!waiting && audioOnly) View.VISIBLE else View.GONE
-        musicBackground.setPlaying(!waiting && audioOnly && player.isPlaying)
+        val showArtwork = !waiting && audioOnly && hasArtwork && player.mediaItemCount <= 1
+        artworkView.visibility = if (showArtwork) View.VISIBLE else View.GONE
+        val showRecord = !waiting && audioOnly && !showArtwork
+        musicBackground.visibility = if (showRecord) View.VISIBLE else View.GONE
+        musicBackground.setPlaying(showRecord && player.isPlaying)
         if (waiting) osd.hide()
         status.visibility = if (waiting) View.VISIBLE else View.GONE
-        osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), currentTrackUri())
+        osd.title.text = TvOsd.displayTitle(player.mediaMetadata.title?.toString(), currentTrackUri(),
+            if (player.mediaItemCount <= 1) castTitle else null)
         osd.source.text = TvOsd.displaySource(currentTrackUri())
         osd.source.visibility = if (uri.isEmpty()) View.GONE else View.VISIBLE
         osd.playbackState.text = when {
@@ -564,6 +721,7 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun startPlayback() {
         if (loadingPlaylist) return
+        artwork.load(metadata)
         if (!M3uPlaylist.matches(uri)) {
             player.setMediaItem(MediaItem.fromUri(Uri.parse(uri).normalizeScheme()))
             player.prepare()
@@ -617,6 +775,15 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun action(service: String, action: SoapAction): Map<String, String> {
         val args = action.args
+        if (sleeping && action.name in listOf("SetAVTransportURI", "Play")) {
+            restoreScreen()
+            if (!resumed) {
+                runCatching {
+                    startActivity(Intent(this, TvActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                }.onFailure { AppLog.record("TvExoScreen", "Wake activity failed: ${it.javaClass.simpleName}") }
+            }
+        }
         return when (action.name) {
             "SetAVTransportURI" -> {
                 val next = args.getValue("CurrentURI")
@@ -628,6 +795,7 @@ internal class TvActivity : Activity(), Renderer {
                 setAudioGain(0)
                 uri = next
                 metadata = args.getValue("CurrentURIMetaData")
+                castTitle = CastTitle.parse(metadata)
                 stopPlayback()
                 emptyMap()
             }
