@@ -52,6 +52,9 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var musicInfo: MusicInfo
     private var musicMode = false
     private lateinit var osd: TvOsd
+    private lateinit var playlistButton: android.widget.Button
+    private var playlistDialog: AlertDialog? = null
+    private var playlistLoaded = false
     private lateinit var status: TextView
     private lateinit var loadControl: RebufferLoadControl
     private lateinit var bufferingPanel: LinearLayout
@@ -133,6 +136,7 @@ internal class TvActivity : Activity(), Renderer {
             addButton("播放 / 暂停") { togglePlayback() }
             addButton("上一首") { skipFromOsd(false) }
             addButton("下一首") { skipFromOsd(true) }
+            playlistButton = addButton("选择曲目") { showPlaylist() }.apply { visibility = View.GONE }
             addButton("停止") { stopPlayback() }
             addButton("字幕") { showTracks(C.TRACK_TYPE_TEXT) }
             addButton("音轨") { showTracks(C.TRACK_TYPE_AUDIO) }
@@ -351,6 +355,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        playlistDialog?.dismiss()
         exitHint?.cancel()
         lastBackAt = null
         VideoScreenshot.attach(null)
@@ -685,7 +690,35 @@ internal class TvActivity : Activity(), Renderer {
         }
     }
 
+    private fun showPlaylist() {
+        if (player.mediaItemCount == 0 || playlistDialog?.isShowing == true) return
+        val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
+        val labels = items.mapIndexed { index, item ->
+            val title = TvOsd.displayTitle(item.mediaMetadata.title?.toString(),
+                item.localConfiguration?.uri?.toString().orEmpty())
+            "${index + 1}. $title"
+        }.toTypedArray()
+        playlistDialog = AlertDialog.Builder(this)
+            .setTitle("选择曲目")
+            .setSingleChoiceItems(labels, player.currentMediaItemIndex) { dialog, index ->
+                if (player.mediaItemCount == items.size && player.getMediaItemAt(index) == items[index]) {
+                    player.seekToDefaultPosition(index)
+                    player.play()
+                    updateStatus()
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .create().also { dialog ->
+                dialog.setOnDismissListener { playlistDialog = null }
+                dialog.show()
+                trackDialogBack(dialog)
+            }
+    }
+
     private fun stopPlayback() {
+        playlistDialog?.dismiss()
+        playlistLoaded = false
         imageState = null
         imageError = null
         castImage.clear()
@@ -842,6 +875,13 @@ internal class TvActivity : Activity(), Renderer {
             !player.playWhenReady -> "已暂停"
             else -> "正在播放"
         }
+        val showPlaylist = !waiting && player.mediaItemCount > 0 &&
+            (playlistLoaded || player.mediaItemCount > 1)
+        if (!showPlaylist && playlistButton.hasFocus()) osd.buttons.getChildAt(0)?.requestFocus()
+        playlistButton.visibility = if (showPlaylist) View.VISIBLE else View.GONE
+        if (showPlaylist) {
+            osd.playbackState.append(" ${player.currentMediaItemIndex + 1}/${player.mediaItemCount}")
+        }
         osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
         musicInfo.update(osd.title.text, osd.playbackState.text, position(), duration())
         if (!waiting) return
@@ -924,6 +964,7 @@ internal class TvActivity : Activity(), Renderer {
                             .build()
                     }
                     AppLog.record("TvExoCast", "Playlist loaded: tracks=${items.size} hls=${list.hls}")
+                    playlistLoaded = !list.hls
                     player.setMediaItems(items)
                     player.prepare()
                     player.play()

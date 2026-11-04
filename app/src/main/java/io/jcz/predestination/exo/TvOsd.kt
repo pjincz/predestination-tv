@@ -128,7 +128,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
-    fun addButton(label: String, action: () -> Unit) {
+    fun addButton(label: String, action: () -> Unit): Button {
         val index = buttons.childCount
         buttons.addView(Button(context).apply {
             text = label
@@ -144,6 +144,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
             setOnFocusChangeListener { _, focused -> if (focused) lastButton = index }
             setOnClickListener { action(); touch() }
         }, LayoutParams(-2, dp(48)).apply { setMargins(dp(4), dp(10), dp(4), 0) })
+        return buttons.getChildAt(index) as Button
     }
 
     fun show(seekFocus: Boolean = false) {
@@ -151,7 +152,11 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
         visibility = VISIBLE
         if (wasHidden) visibilityChanged()
         if (seekFocus) timeline.requestFocus()
-        else if (wasHidden || !hasFocus()) buttons.getChildAt(lastButton)?.requestFocus()
+        else if (wasHidden || !hasFocus()) {
+            val button = buttons.getChildAt(lastButton)
+            if (button?.visibility == VISIBLE) button.requestFocus()
+            else buttons.getChildAt(0)?.requestFocus()
+        }
         touch()
     }
 
