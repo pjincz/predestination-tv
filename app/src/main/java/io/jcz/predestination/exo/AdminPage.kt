@@ -8,6 +8,8 @@ import java.security.MessageDigest
 import android.util.Base64
 import java.security.SecureRandom
 
+private const val SESSION_COOKIE = "exo_admin_session"
+private const val APPROVAL_COOKIE = "exo_admin_approval"
 private const val SESSION_SECONDS = 8 * 60 * 60
 private const val APPROVAL_SECONDS = 120
 
@@ -36,7 +38,7 @@ internal class AdminPage(private val context: Context) {
         MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
 
     private fun authenticated(request: HttpRequest): Boolean {
-        val token = cookie(request, "admin_session") ?: return false
+        val token = cookie(request, SESSION_COOKIE) ?: return false
         val digest = sessionDigest(token)
         return System.currentTimeMillis() < preferences.getLong("session:$digest", 0L)
     }
@@ -84,12 +86,12 @@ internal class AdminPage(private val context: Context) {
         }
         if (authenticated(request)) return dashboard()
 
-        val claim = cookie(request, "admin_approval")
+        val claim = cookie(request, APPROVAL_COOKIE)
         val current = pending
         if (claim != null) {
             if (current == null || current.approval.id != claim || current.expires <= now ||
                 current.approved == false) {
-                return page(403, "授权已拒绝或过期", """<p><a href="/admin">重新请求授权</a></p>""").withCookie("admin_approval", "", 0)
+                return page(403, "授权已拒绝或过期", """<p><a href="/admin">重新请求授权</a></p>""").withCookie(APPROVAL_COOKIE, "", 0)
             }
             if (current.approved == true) {
                 val session = token()
@@ -97,7 +99,7 @@ internal class AdminPage(private val context: Context) {
                     return page(503, "无法保存授权，请重试")
                 }
                 pending = null
-                return dashboard().withCookie("admin_session", session, SESSION_SECONDS)
+                return dashboard().withCookie(SESSION_COOKIE, session, SESSION_SECONDS)
             }
             return waiting(current.approval)
         }
@@ -107,7 +109,7 @@ internal class AdminPage(private val context: Context) {
         val approval = Approval(token(), (1000 + random.nextInt(9000)).toString(),
             request.peer.hostAddress.orEmpty())
         pending = Pending(approval, now + APPROVAL_SECONDS * 1000L)
-        return waiting(approval).withCookie("admin_approval", approval.id, APPROVAL_SECONDS)
+        return waiting(approval).withCookie(APPROVAL_COOKIE, approval.id, APPROVAL_SECONDS)
     }
 
     fun screenshot(request: HttpRequest, baseUrl: String): HttpResponse {
