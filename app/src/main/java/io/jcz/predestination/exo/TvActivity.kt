@@ -17,6 +17,9 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.widget.TextView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -193,6 +196,20 @@ internal class TvActivity : Activity(), Renderer {
             addView(sleepCountdown, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
         osd.visibilityChanged = ::updateMusicInfoVisibility
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        hideSystemBars(window)
+    }
+
+    private fun hideSystemBars(target: android.view.Window) {
+        WindowCompat.getInsetsController(target, target.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars(window)
     }
 
     override fun onStart() {
@@ -577,6 +594,7 @@ internal class TvActivity : Activity(), Renderer {
 
     @android.annotation.SuppressLint("GestureBackNavigation") // API 33+ callback is also registered below.
     private fun trackDialogBack(dialog: AlertDialog) {
+        dialog.window?.let(::hideSystemBars)
         fun cancelFromBack() {
             if (dialog === exitDialog) handleBack() else dialog.cancel()
         }
