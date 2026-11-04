@@ -15,6 +15,7 @@ internal class AdminPage(private val context: Context) {
     private val preferences = context.getSharedPreferences("admin", Context.MODE_PRIVATE)
     private val update = ApkUpdate(context)
     private val bufferSettings = BufferSettings(context)
+    private val wallSettings = WallSettings(context)
     private val activityManager = context.getSystemService(ActivityManager::class.java)
     private val appVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
     internal data class Approval(val id: String, val code: String, val peer: String)
@@ -68,7 +69,7 @@ internal class AdminPage(private val context: Context) {
     @Synchronized
     fun handle(request: HttpRequest, baseUrl: String): HttpResponse {
         if (request.headers["host"] != baseUrl.removePrefix("http://")) return page(403, "地址无效")
-        if (request.path == "/admin" && request.method == "POST") return saveBufferSettings(request, baseUrl)
+        if (request.path == "/admin" && request.method == "POST") return saveSettings(request, baseUrl)
         if (request.method != "GET") return page(405, "请求方法不支持")
         if (request.headers["sec-fetch-site"] == "cross-site") return page(403, "请直接打开管理员地址")
         val now = SystemClock.elapsedRealtime()
@@ -137,13 +138,24 @@ internal class AdminPage(private val context: Context) {
     private fun HttpResponse.withCookie(name: String, value: String, seconds: Int) =
         copy(headers = headers + ("Set-Cookie" to "$name=$value; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=$seconds"))
 
-    private fun saveBufferSettings(request: HttpRequest, baseUrl: String): HttpResponse {
+    private fun saveSettings(request: HttpRequest, baseUrl: String): HttpResponse {
         if (request.headers["origin"] != baseUrl || !authenticated(request))
             return page(403, "请先在电视上授权")
         if (request.headers["content-type"]?.substringBefore(';') != "application/x-www-form-urlencoded" ||
-            request.body.size > 256) return page(400, "缓冲设置格式无效")
-        val fields = request.body.toString(Charsets.UTF_8).split('&').associate {
-            it.substringBefore('=') to it.substringAfter('=', "")
+            request.body.size > 16384) return page(400, "设置格式无效")
+        val fields = runCatching {
+            request.body.toString(Charsets.UTF_8).split('&').associate {
+                java.net.URLDecoder.decode(it.substringBefore('='), "UTF-8") to
+                    java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8")
+            }
+        }.getOrElse { return page(400, "设置格式无效") }
+        if (fields["settings"] == "wall") {
+            val config = runCatching {
+                WallSettings.parse(fields["url"].orEmpty(), fields["zoom"].orEmpty(),
+                    fields["refreshSeconds"].orEmpty())
+            }.getOrElse { return page(400, "Wall Page 设置无效，请检查 URL、缩放和刷新间隔") }
+            if (!wallSettings.save(config)) return page(503, "保存失败，请重试")
+            return HttpResponse(303, headers = mapOf("Location" to "/admin", "Cache-Control" to "no-store"))
         }
         val memory = fields["memoryMiB"]?.toIntOrNull()
         val seconds = fields["seconds"]?.toIntOrNull()
@@ -189,11 +201,31 @@ internal class AdminPage(private val context: Context) {
         } + "</tbody></table>"
     }
 
+    private fun wallForm(): String {
+        val config = wallSettings.read()
+        return """
+            <h2>Wall Page</h2>
+            <form action="/admin" method="post">
+                <input type="hidden" name="settings" value="wall">
+                <p><label>URL <input name="url" type="url" maxlength="4096"
+                    value="${xml(config.url)}" placeholder="https://example.com"></label></p>
+                <p><label>Zooming <input name="zoom" type="number" min="0.25" max="5"
+                    step="0.01" required value="${config.zoom}"></label></p>
+                <p><label>Refresh interval <input name="refreshSeconds" type="number" min="0"
+                    max="86400" required value="${config.refreshSeconds}"> 秒（0 不刷新）</label></p>
+                <button type="submit">保存 Wall Page</button>
+                <p>URL 留空关闭。等待页空闲 30 秒后显示；配置后停用自动息屏，仍可手动息屏。</p>
+                <p>支持网页触屏和键盘操作；返回逐级后退，最后回到等待页。</p>
+            </form>
+        """.trimIndent()
+    }
+
     private fun dashboard() = page(200, "管理员页面", """
             ${deviceInfo()}
             <p><a href="/admin/screenshot" target="_blank" rel="noopener">截取视频画面（PNG）</a></p>
             <p>截取当前视频，不含 OSD；打开后可保存图片。对比时请暂停在同一帧。</p>
             ${bufferForm()}
+            ${wallForm()}
             <p><a href="/admin/logs" target="_blank" rel="noopener">查看运行日志</a></p>
             <h2>上传 APK 更新</h2>
             <input id="apk" type="file" accept=".apk">

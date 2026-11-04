@@ -4,10 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class IdleScreenTimerTest {
-    @Test fun onlyLastTenSecondsAreShownAndResetHidesCountdown() {
+    @Test fun fullCountdownIsShownAndResetHidesCountdown() {
         val timer = IdleScreenTimer()
         timer.update(1000, true)
-        assertNull(timer.countdownSeconds(20999))
+        assertEquals(30, timer.countdownSeconds(1000))
+        assertEquals(20, timer.countdownSeconds(11000))
+        assertEquals(11, timer.countdownSeconds(20999))
         assertEquals(10, timer.countdownSeconds(21000))
         assertEquals(10, timer.countdownSeconds(21999))
         assertEquals(9, timer.countdownSeconds(22000))

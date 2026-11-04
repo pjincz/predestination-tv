@@ -59,6 +59,10 @@ internal class TvActivity : Activity(), Renderer {
     private var playlistDialog: AlertDialog? = null
     private var playlistLoaded = false
     private lateinit var status: TextView
+    private lateinit var wallPage: WallPage
+    private val wallSettings by lazy { WallSettings(this) }
+    private var wallConfig = WallSettings.Config()
+    private val wallTimer = IdleScreenTimer()
     private lateinit var loadControl: RebufferLoadControl
     private lateinit var bufferingPanel: LinearLayout
     private lateinit var bufferingText: TextView
@@ -159,6 +163,7 @@ internal class TvActivity : Activity(), Renderer {
             gravity = Gravity.CENTER
             textSize = 22f
         }
+        wallPage = WallPage(this)
         bufferingText = TextView(this).apply {
             gravity = Gravity.CENTER
             textSize = 22f
@@ -179,7 +184,7 @@ internal class TvActivity : Activity(), Renderer {
             addView(bufferingProgress, LinearLayout.LayoutParams(-1, -2))
         }
         setContentView(TvRemoteFrame(this) { event ->
-            ::player.isInitialized && !isWaiting() && osd.handleKey(event)
+            !wallPage.active && ::player.isInitialized && !isWaiting() && osd.handleKey(event)
         }.apply {
             setOnClickListener {
                 if (::player.isInitialized && !isWaiting()) {
@@ -190,6 +195,7 @@ internal class TvActivity : Activity(), Renderer {
             addView(musicBackground, FrameLayout.LayoutParams(-1, -1))
             addView(artworkView, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
+            addView(wallPage, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
             addView(musicInfo, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
             addView(osd, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
@@ -372,6 +378,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onStop() {
+        leaveWallPage()
         playlistDialog?.dismiss()
         exitHint?.cancel()
         lastBackAt = null
@@ -410,6 +417,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onDestroy() {
+        wallPage.hide()
         castImage.close()
         artwork.close()
         AudioOnlyMode.restore(this)
@@ -438,6 +446,7 @@ internal class TvActivity : Activity(), Renderer {
 
     override fun onUserInteraction() {
         super.onUserInteraction()
+        wallTimer.reset()
         idleScreenTimer.reset()
         sleepCountdown.visibility = View.GONE
     }
@@ -463,6 +472,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun restoreScreen() {
+        wallTimer.reset()
         exitHint?.cancel()
         lastBackAt = null
         sleeping = false
@@ -474,11 +484,33 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun checkIdleScreen() {
+        val config = wallSettings.read()
+        if (config != wallConfig) {
+            wallConfig = config
+            leaveWallPage()
+        }
         if (sleeping) return
-        val eligible = screenOffSupported && AudioOnlyMode.enabled(this) && resumed &&
+        val idle = resumed &&
             hasWindowFocus() && adminDialog?.isShowing != true && updateDialog?.isShowing != true &&
             gainDialog?.isShowing != true && exitDialog?.isShowing != true && isWaiting()
         val now = android.os.SystemClock.elapsedRealtime()
+        if (config.url.isNotEmpty()) {
+            idleScreenTimer.reset()
+            val due = wallTimer.update(now, idle && !wallPage.active)
+            val seconds = wallTimer.countdownSeconds(now)
+            sleepCountdown.visibility = if (seconds == null) View.GONE else View.VISIBLE
+            if (seconds != null) sleepCountdown.text = "${seconds} 秒后展示 Wall Page"
+            if (due) {
+                runCatching { wallPage.show(config) }.onFailure {
+                    wallPage.hide()
+                    AppLog.record("TvExoWall", "WebView unavailable: ${it.javaClass.simpleName}")
+                    Toast.makeText(this, "无法打开 Wall Page，请检查系统 WebView", Toast.LENGTH_LONG).show()
+                }
+            }
+            return
+        }
+        wallTimer.reset()
+        val eligible = screenOffSupported && AudioOnlyMode.enabled(this) && idle
         val due = idleScreenTimer.update(now, eligible)
         val seconds = idleScreenTimer.countdownSeconds(now)
         sleepCountdown.visibility = if (seconds == null) View.GONE else View.VISIBLE
@@ -486,8 +518,18 @@ internal class TvActivity : Activity(), Renderer {
         if (due) enterScreenOff()
     }
 
+    private fun leaveWallPage() {
+        if (wallPage.active) {
+            WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.ime())
+            wallPage.hide()
+        }
+        wallTimer.reset()
+        lastBackAt = null
+    }
+
     private fun enterScreenOff() {
         if (!screenOffSupported || sleeping) return
+        leaveWallPage()
         sleeping = true
         sleepCountdown.visibility = View.GONE
         osd.hide()
@@ -506,6 +548,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (wallPage.active) return super.onKeyDown(keyCode, event)
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
             if (event.repeatCount == 0) togglePlayback()
             return true
@@ -533,6 +576,13 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun handleBack() {
         if (sleeping) { restoreScreen(); return }
+        if (wallPage.active) {
+            val insets = androidx.core.view.ViewCompat.getRootWindowInsets(window.decorView)
+            if (insets?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
+                WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.ime())
+            } else if (!wallPage.goBack()) leaveWallPage()
+            return
+        }
         val now = android.os.SystemClock.elapsedRealtime()
         val previous = lastBackAt
         lastBackAt = now
@@ -735,6 +785,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun stopPlayback() {
+        leaveWallPage()
         playlistDialog?.dismiss()
         playlistLoaded = false
         imageState = null
@@ -864,6 +915,7 @@ internal class TvActivity : Activity(), Renderer {
         confirmUpdate()
         updateBufferingProgress()
         val waiting = isWaiting()
+        if (!waiting && wallPage.active) leaveWallPage()
         video.visibility = if (waiting || imageState != null) View.INVISIBLE else View.VISIBLE
         val tracks = player.currentTracks
         val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
@@ -930,6 +982,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun startPlayback() {
+        leaveWallPage()
         if (loadingPlaylist) return
         if (externalItems.isNotEmpty()) {
             player.setMediaItems(externalItems)

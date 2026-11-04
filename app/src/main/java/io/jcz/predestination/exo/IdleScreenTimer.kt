@@ -10,7 +10,7 @@ internal class IdleScreenTimer(private val delayMillis: Long = 30000) {
     fun countdownSeconds(now: Long): Int? {
         val start = since ?: return null
         val remaining = delayMillis - (now - start)
-        if (fired || remaining <= 0 || remaining > 10000) return null
+        if (fired || remaining <= 0) return null
         return ((remaining + 999) / 1000).toInt()
     }
 
