@@ -45,6 +45,9 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var musicBackground: MusicBackgroundView
     private lateinit var artworkView: android.widget.ImageView
     private lateinit var artwork: CastArtwork
+    private lateinit var castImage: CastArtwork
+    private var imageState: String? = null
+    private var imageError: String? = null
     private var hasArtwork = false
     private lateinit var musicInfo: MusicInfo
     private var musicMode = false
@@ -119,6 +122,7 @@ internal class TvActivity : Activity(), Renderer {
             if (bitmap == null) artworkView.visibility = View.GONE
         }
         musicInfo = MusicInfo(this)
+        castImage = CastArtwork { bitmap -> artworkView.setImageBitmap(bitmap) }
         osd = TvOsd(this).apply {
             toggle = { togglePlayback() }
             seek = { seconds -> seekFromOsd(position() + seconds) }
@@ -325,6 +329,9 @@ internal class TvActivity : Activity(), Renderer {
             return
         }
         cancelPlaylist()
+        imageState = null
+        imageError = null
+        castImage.clear()
         artwork.clear()
         exitDialog?.dismiss()
         exitDialog = null
@@ -348,6 +355,7 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     override fun onDestroy() {
+        castImage.close()
         artwork.close()
         AudioOnlyMode.restore(this)
         main.removeCallbacks(refresh)
@@ -448,7 +456,12 @@ internal class TvActivity : Activity(), Renderer {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY || keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
-            if (keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) player.pause()
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+                if (imageState in listOf("PLAYING", "TRANSITIONING")) {
+                    imageState = "PAUSED_PLAYBACK"
+                    updateStatus()
+                } else player.pause()
+            }
             else if (uri.isNotEmpty()) action(AV, SoapAction("Play", mapOf("Speed" to "1")))
             return true
         }
@@ -468,6 +481,11 @@ internal class TvActivity : Activity(), Renderer {
         val now = android.os.SystemClock.elapsedRealtime()
         val previous = lastBackAt
         lastBackAt = now
+        if (exitDialog?.isShowing != true && osd.visibility == View.VISIBLE) {
+            exitHint?.cancel()
+            osd.hide()
+            return
+        }
         if (previous != null && now - previous in 0L..500L) {
             exitApp()
             return
@@ -543,6 +561,11 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun togglePlayback() {
         if (uri.isEmpty()) return
+        if (imageState != null) {
+            action(AV, if (imageState in listOf("PLAYING", "TRANSITIONING")) SoapAction("Pause", emptyMap())
+                else SoapAction("Play", mapOf("Speed" to "1")))
+            return
+        }
         if (player.playWhenReady && player.playbackState != Player.STATE_IDLE &&
             player.playbackState != Player.STATE_ENDED) player.pause()
         else action(AV, SoapAction("Play", mapOf("Speed" to "1")))
@@ -632,6 +655,9 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun stopPlayback() {
+        imageState = null
+        imageError = null
+        castImage.clear()
         artwork.clear()
         cancelPlaylist()
         player.stop()
@@ -641,6 +667,7 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun state() = when {
         uri.isEmpty() -> "NO_MEDIA_PRESENT"
+        imageState != null -> imageState!!
         loadingPlaylist -> "TRANSITIONING"
         player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED -> "STOPPED"
         !player.playWhenReady -> "PAUSED_PLAYBACK"
@@ -711,6 +738,12 @@ internal class TvActivity : Activity(), Renderer {
     }
 
     private fun updateBufferingProgress() {
+        if (imageState == "TRANSITIONING") {
+            bufferingPanel.visibility = View.VISIBLE
+            bufferingText.text = "正在加载图片"
+            bufferingProgress.isIndeterminate = true
+            return
+        }
         if (loadingPlaylist) {
             bufferingPanel.visibility = View.VISIBLE
             bufferingText.text = "正在读取歌曲列表"
@@ -749,7 +782,7 @@ internal class TvActivity : Activity(), Renderer {
         confirmUpdate()
         updateBufferingProgress()
         val waiting = isWaiting()
-        video.visibility = if (waiting) View.INVISIBLE else View.VISIBLE
+        video.visibility = if (waiting || imageState != null) View.INVISIBLE else View.VISIBLE
         val tracks = player.currentTracks
         val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
             !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
@@ -757,7 +790,8 @@ internal class TvActivity : Activity(), Renderer {
         musicMode = !waiting && audioOnly
         if (musicMode && !wasMusic) osd.hide()
         updateMusicInfoVisibility()
-        val showArtwork = !waiting && audioOnly && hasArtwork && player.mediaItemCount <= 1
+        val showArtwork = !waiting && (imageState != null ||
+            (audioOnly && hasArtwork && player.mediaItemCount <= 1))
         artworkView.visibility = if (showArtwork) View.VISIBLE else View.GONE
         val showRecord = !waiting && audioOnly && !showArtwork
         musicBackground.visibility = if (showRecord) View.VISIBLE else View.GONE
@@ -770,6 +804,9 @@ internal class TvActivity : Activity(), Renderer {
         osd.source.visibility = if (uri.isEmpty()) View.GONE else View.VISIBLE
         osd.playbackState.text = when {
             waiting -> "等待播放"
+            imageState == "TRANSITIONING" -> "正在加载图片"
+            imageState == "PAUSED_PLAYBACK" -> "已暂停"
+            imageState == "PLAYING" -> "正在显示图片"
             player.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
             !player.playWhenReady -> "已暂停"
             else -> "正在播放"
@@ -777,7 +814,7 @@ internal class TvActivity : Activity(), Renderer {
         osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
         musicInfo.update(osd.title.text, osd.playbackState.text, position(), duration())
         if (!waiting) return
-        val error = playlistError ?: player.playerError?.errorCodeName
+        val error = imageError ?: playlistError ?: player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",
             CastService.status, error?.let { "播放失败 · $it" }).joinToString("\n")
     }
@@ -791,7 +828,7 @@ internal class TvActivity : Activity(), Renderer {
     private fun position() = player.currentPosition.coerceAtLeast(0) / 1000.0
 
     private fun transportStatus() =
-        if (player.playerError == null && playlistError == null) "OK" else "ERROR_OCCURRED"
+        if (player.playerError == null && playlistError == null && imageError == null) "OK" else "ERROR_OCCURRED"
 
     private fun currentTrackUri() = player.currentMediaItem?.localConfiguration?.uri?.toString() ?: uri
 
@@ -805,6 +842,24 @@ internal class TvActivity : Activity(), Renderer {
 
     private fun startPlayback() {
         if (loadingPlaylist) return
+        if (CastImage.matches(uri, metadata)) {
+            stopPlayback()
+            imageState = "TRANSITIONING"
+            osd.hide()
+            AppLog.record("TvExoImage", "Loading image: $uri")
+            castImage.loadUrl(uri, maxEdge = 3840, maxBytes = 32 * 1024 * 1024) { success ->
+                if (success) {
+                    if (imageState == "TRANSITIONING") imageState = "PLAYING"
+                } else {
+                    imageState = "STOPPED"
+                    imageError = "图片加载失败（网络、格式或超过 32 MiB）"
+                }
+                AppLog.record("TvExoImage", "Image load success=$success state=$imageState")
+                updateStatus()
+            }
+            updateStatus()
+            return
+        }
         artwork.load(metadata)
         if (!M3uPlaylist.matches(uri)) {
             player.setMediaItem(MediaItem.fromUri(Uri.parse(uri).normalizeScheme()))
@@ -885,12 +940,22 @@ internal class TvActivity : Activity(), Renderer {
             "Play" -> {
                 if (args["Speed"] != "1") throw UpnpError(717, "Unsupported speed")
                 if (uri.isEmpty()) throw UpnpError(701, "No media present")
+                if (imageState in listOf("PLAYING", "TRANSITIONING", "PAUSED_PLAYBACK")) {
+                    if (imageState == "PAUSED_PLAYBACK") imageState = "PLAYING"
+                    updateStatus()
+                    return emptyMap()
+                }
                 if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
                     startPlayback()
                 } else player.play()
                 emptyMap()
             }
             "Pause" -> {
+                if (imageState in listOf("PLAYING", "TRANSITIONING", "PAUSED_PLAYBACK")) {
+                    imageState = "PAUSED_PLAYBACK"
+                    updateStatus()
+                    return emptyMap()
+                }
                 if (loadingPlaylist) {
                     cancelPlaylist()
                     updateStatus()

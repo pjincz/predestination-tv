@@ -17,13 +17,21 @@ internal class CastArtwork(private val display: (Bitmap?) -> Unit) : AutoCloseab
     private var generation = 0
 
     fun load(metadata: String) {
+        loadUrl(artworkUrl(metadata))
+    }
+
+    fun loadUrl(url: String?, maxEdge: Int = 1024, maxBytes: Int = 4 * 1024 * 1024,
+                completed: (Boolean) -> Unit = {}) {
         clear()
-        val url = artworkUrl(metadata) ?: return
+        if (url == null) return
         val request = generation
         pending = worker.submit {
-            val bitmap = runCatching { download(url) }.getOrNull()
+            val bitmap = runCatching { download(url, maxEdge, maxBytes) }.getOrNull()
             main.post {
-                if (request == generation) display(bitmap) else bitmap?.recycle()
+                if (request == generation) {
+                    display(bitmap)
+                    completed(bitmap != null)
+                } else bitmap?.recycle()
             }
         }
     }
@@ -55,7 +63,7 @@ internal class CastArtwork(private val display: (Bitmap?) -> Unit) : AutoCloseab
             Protocol.mediaUri(value)
         }.getOrNull()
 
-        private fun download(address: String): Bitmap? {
+        private fun download(address: String, maxEdge: Int, maxBytes: Int): Bitmap? {
             var url = address
             repeat(5) {
                 if (Thread.currentThread().isInterrupted) return null
@@ -70,7 +78,7 @@ internal class CastArtwork(private val display: (Bitmap?) -> Unit) : AutoCloseab
                         url = Protocol.mediaUri(URL(URL(url), location).toString())
                         return@repeat
                     }
-                    if (status != 200 || connection.contentLengthLong > 4 * 1024 * 1024) return null
+                    if (status != 200 || connection.contentLengthLong > maxBytes) return null
                     val bytes = connection.inputStream.use { input ->
                         val output = java.io.ByteArrayOutputStream()
                         val buffer = ByteArray(8192)
@@ -78,7 +86,7 @@ internal class CastArtwork(private val display: (Bitmap?) -> Unit) : AutoCloseab
                             if (Thread.currentThread().isInterrupted) return null
                             val count = input.read(buffer)
                             if (count < 0) break
-                            if (output.size() + count > 4 * 1024 * 1024) return null
+                            if (output.size() + count > maxBytes) return null
                             output.write(buffer, 0, count)
                         }
                         output.toByteArray()
@@ -87,7 +95,7 @@ internal class CastArtwork(private val display: (Bitmap?) -> Unit) : AutoCloseab
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                     if (options.outWidth <= 0 || options.outHeight <= 0) return null
                     options.inSampleSize = 1
-                    while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > 1024)
+                    while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > maxEdge)
                         options.inSampleSize *= 2
                     options.inJustDecodeBounds = false
                     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)

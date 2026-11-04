@@ -10,6 +10,7 @@ internal const val RC = "urn:schemas-upnp-org:service:RenderingControl:1"
 internal const val CM = "urn:schemas-upnp-org:service:ConnectionManager:1"
 internal const val DEVICE = "urn:schemas-upnp-org:device:MediaRenderer:1"
 internal const val SINK = "http-get:*:video/*:*,http-get:*:audio/*:*," +
+    "http-get:*:image/jpeg:*,http-get:*:image/png:*," +
     "http-get:*:application/vnd.apple.mpegurl:*,http-get:*:application/x-mpegURL:*," +
     "rtsp-rtp-udp:*:*:*"
 
