@@ -1,23 +1,54 @@
 # Predestination TV Exo
 
-独立 Android TV 投屏接收器，使用 Media3 ExoPlayer。包名为
-`io.jcz.predestination.tv.exo`，可与原版同时安装。最低 Android 8.0。
+[简体中文](README.zh.md)
 
-打开电视上的 **Predestination TV Exo**，在同一局域网的手机上选择
-**Predestination TV Exo · 电视型号**。应用在前台时接收 DLNA 投屏，退到后台时停止接收和播放。
+Predestination TV Exo grew out of **Predestination** and now lives in its own repository.
+Built on Media3 ExoPlayer, it provides **DLNA / UPnP casting reception** for Android TVs,
+TV boxes, tablets, and phones, with an admin interface, Wall Page, and screen-off support on select TVs.
 
-基础版支持单地址 HTTP(S) 音视频（含常见 HLS 地址）、RTSP、播放、暂停、停止、
-可定位媒体的跳转，以及投屏端音量和静音。RTSP 使用 Media3 默认缓冲和传输行为，
-支持情况取决于流的编码和 SDP。图片投屏、普通 M3U 队列、本地文件分享、音频可视化和
-厂商息屏功能留在原版。
+It plays incoming cast media and returns to the waiting screen when playback ends.
+When idle, it can display a web dashboard or turn off the screen on supported TVs.
 
-## 构建和检查
+## Main Features
 
-使用 JDK 17 或更高版本和 Android SDK 36。在本目录运行：
+### DLNA / UPnP Casting Reception
+
+- Receive audio and video from casting clients on the same local network, with play, pause, stop, seek, and volume controls.
+- Support HTTP(S), HLS, and RTSP. Media compatibility depends on the codecs, device decoding capabilities, and stream format.
+- Support JPEG and PNG image casting, as well as standard M3U playlists, track selection, and previous/next controls.
+- Offer audio track and subtitle selection, overall audio gain, per-channel gain, and dynamic range compression.
+- Open audio and video files through Android's "Open with" or sharing options.
+
+### Admin Interface
+
+Visit `/admin` at the address shown on the waiting screen to:
+
+- View basic device information, available storage, and runtime logs.
+- Configure maximum buffer memory, buffer duration, and Wall Page.
+- Update the app remotely.
+
+### Wall Page
+
+Wall Page displays web dashboards, clocks, or other information pages while the device is idle.
+
+## Getting Started
+
+1. Install and open **Predestination TV Exo** on the receiving device.
+2. Connect the sending device to the same local network and select the receiver in an app that supports DLNA / UPnP.
+3. To configure the receiver, open the `/admin` address shown on its waiting screen in a browser and approve access on the receiving device.
+
+## Building and Checking
+
+Use a JDK compatible with the current Android Gradle Plugin and Android SDK 36.
+Configure `ANDROID_HOME` or a local `local.properties` file, then run these commands from the repository root:
 
 ```powershell
-.\gradlew.bat assembleDebug testDebugUnitTest lintDebug
-```
+# ARMv7, for some TVs and TV boxes
+.\gradlew.bat assembleDebug -PtargetAbi=armeabi-v7a
 
-调试包位于 `app/build/outputs/apk/debug/app-debug.apk`。安装后，在目标电视和手机上验证
-设备发现、HTTP 播放、暂停和定位、连续换源、RTSP 起播和停止，以及退出后设备从列表消失。
+# ARM64, for phones, tablets, and TVs that support this architecture
+.\gradlew.bat assembleDebug -PtargetAbi=arm64-v8a
+
+# Unit tests and static analysis
+.\gradlew.bat testDebugUnitTest lintDebug
+```
