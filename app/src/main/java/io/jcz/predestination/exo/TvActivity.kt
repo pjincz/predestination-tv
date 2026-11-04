@@ -102,6 +102,7 @@ internal class TvActivity : Activity(), Renderer {
             addButton("音量增益") { showGainDialog() }
         }
         status = TextView(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
             gravity = Gravity.CENTER
             textSize = 22f
         }
@@ -514,6 +515,7 @@ internal class TvActivity : Activity(), Renderer {
         confirmUpdate()
         updateBufferingProgress()
         val waiting = isWaiting()
+        video.visibility = if (waiting) View.INVISIBLE else View.VISIBLE
         val tracks = player.currentTracks
         val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
             !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
