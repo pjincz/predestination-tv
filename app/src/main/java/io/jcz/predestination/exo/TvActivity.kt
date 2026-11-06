@@ -76,6 +76,7 @@ internal class TvActivity : Activity(), Renderer {
     private var pendingOpen: Intent? = null
     private var externalItems: List<MediaItem> = emptyList()
     private var metadata = ""
+    private var castArtworkUrl: String? = null
     private var castTitle: String? = null
     private var nextUri = ""
     private var nextMetadata = ""
@@ -421,6 +422,7 @@ internal class TvActivity : Activity(), Renderer {
         externalItems = emptyList()
         uri = ""
         metadata = ""
+        castArtworkUrl = null
         castTitle = null
         super.onStop()
     }
@@ -748,6 +750,7 @@ internal class TvActivity : Activity(), Renderer {
         setAudioGain(0)
         uri = next
         metadata = nextMeta
+        castArtworkUrl = CastArtwork.artworkUrl(nextMeta)
         castTitle = CastTitle.parse(metadata)
         stopPlayback()
     }
@@ -930,12 +933,17 @@ internal class TvActivity : Activity(), Renderer {
         val tracks = player.currentTracks
         val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
             !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
+        if (imageState == null && !waiting && !loadingPlaylist) {
+            artwork.loadMedia(player.currentMediaItemIndex to player.currentMediaItem,
+                player.mediaMetadata.artworkData,
+                if (player.mediaItemCount <= 1) castArtworkUrl else null)
+        }
         val wasMusic = musicMode
         musicMode = !waiting && audioOnly
         if (musicMode && !wasMusic) osd.hide()
         updateMusicInfoVisibility()
         val showArtwork = !waiting && (imageState != null ||
-            (audioOnly && hasArtwork && player.mediaItemCount <= 1))
+            (audioOnly && hasArtwork))
         artworkView.visibility = if (showArtwork) View.VISIBLE else View.GONE
         val showRecord = !waiting && audioOnly && !showArtwork
         musicBackground.visibility = if (showRecord) View.VISIBLE else View.GONE
@@ -1018,7 +1026,7 @@ internal class TvActivity : Activity(), Renderer {
             updateStatus()
             return
         }
-        artwork.load(metadata)
+        artwork.clear()
         if (!M3uPlaylist.matches(uri)) {
             player.setMediaItem(MediaItem.fromUri(Uri.parse(uri).normalizeScheme()))
             player.prepare()
