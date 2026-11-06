@@ -24,12 +24,27 @@ internal class MusicStage(context: Context, background: View, artwork: View) : F
         gravity = Gravity.CENTER_VERTICAL
         visibility = GONE
     }
+    private val lyricStatus = TextView(context).apply {
+        gravity = Gravity.CENTER
+        textSize = 19f
+        setTextColor(context.getColor(R.color.player_text_secondary))
+        setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), Color.BLACK)
+        visibility = GONE
+    }
+
+    fun showLyricStatus(text: String?) {
+        lyricStatus.text = text.orEmpty()
+        lyricStatus.visibility = if (split && text != null) VISIBLE else GONE
+        lyricColumn.visibility = if (split && text == null) VISIBLE else GONE
+    }
+
     var split = false
         set(value) {
             if (field == value) return
             field = value
+            setBackgroundResource(if (value) R.drawable.music_gradient else 0)
             resetScroll()
-            lyricColumn.visibility = if (value) VISIBLE else GONE
+            showLyricStatus(lyricStatus.text.toString().takeIf { it.isNotEmpty() })
             requestLayout()
         }
 
@@ -37,6 +52,7 @@ internal class MusicStage(context: Context, background: View, artwork: View) : F
         addView(background, LayoutParams(-1, -1))
         addView(artwork, LayoutParams(-1, -1))
         addView(lyricColumn, LayoutParams(-1, -1))
+        addView(lyricStatus, LayoutParams(-1, -1))
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -171,7 +187,7 @@ internal class MusicStage(context: Context, background: View, artwork: View) : F
         val padding = if (split) dp(20) else 0
         for (index in 0 until childCount) {
             val child = getChildAt(index)
-            val x = padding + if (index == 2 && split) width / 2 else 0
+            val x = padding + if (index >= 2 && split) width / 2 else 0
             child.layout(x, padding, x + child.measuredWidth, padding + child.measuredHeight)
         }
     }

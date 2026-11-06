@@ -134,4 +134,7 @@
     <string name="save_language">"保存语言设置"</string>
     <string name="language_help">"播放器和管理员页面共用此设置；其他系统语言使用英文。"</string>
     <string name="gain_value">"%1$s: %2$s dB"</string>
+    <string name="lyrics_downloading">正在下载歌词…</string>
+    <string name="lyrics_unavailable">暂无歌词</string>
+    <string name="lyrics_failed">歌词加载失败</string>
 </resources>

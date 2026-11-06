@@ -1,10 +1,4 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item>
-        <shape>
-            <gradient android:startColor="@color/music_gradient_start" android:centerColor="@color/music_gradient_center"
-                android:endColor="@color/music_gradient_end" android:angle="315" />
-        </shape>
-    </item>
     <item android:width="240dp" android:height="240dp" android:gravity="center">
         <shape android:shape="oval">
             <solid android:color="@color/music_record" />

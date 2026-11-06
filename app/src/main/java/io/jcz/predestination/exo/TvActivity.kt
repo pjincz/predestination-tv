@@ -55,6 +55,10 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var musicInfo: MusicInfo
     private lateinit var musicStage: MusicStage
     private var musicMode = false
+    private val onlineLyrics by lazy { OnlineLyrics(java.io.File(filesDir, "lyrics-v1")) }
+    private var onlineLyricQuery: LyricQuery? = null
+    private var lyricGeneration = 0
+    private var lyricStatus = R.string.lyrics_unavailable
     private var lyricKey: Any? = null
     private var lyricFormats: List<Format> = emptyList()
     private var lyrics = EmbeddedLyrics(emptyList())
@@ -146,7 +150,6 @@ internal class TvActivity : Activity(), Renderer {
         }
         artworkView = android.widget.ImageView(this).apply {
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(android.graphics.Color.BLACK)
             visibility = View.GONE
         }
         artwork = CastArtwork { bitmap ->
@@ -463,6 +466,7 @@ internal class TvActivity : Activity(), Renderer {
             player.release()
             playerActive = false
         }
+        onlineLyrics.close()
         playlistExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -950,13 +954,48 @@ internal class TvActivity : Activity(), Renderer {
             .flatMap { group -> (0 until group.length).filter { group.isTrackSelected(it) }
                 .map { group.getTrackFormat(it) } } else emptyList()
         if (key != lyricKey || formats != lyricFormats) {
+            lyricGeneration++
+            onlineLyricQuery = null
+            lyricStatus = R.string.lyrics_unavailable
             lyricKey = key
             lyricFormats = formats
             lyrics = EmbeddedLyrics.from(formats)
             musicStage.updateLyrics(EmbeddedLyrics(emptyList()), 0)
             if (musicMode) AppLog.record("TvExoLyrics", "Embedded timed lyrics: lines=${lyrics.lines.size}")
         }
-        musicStage.split = musicMode && lyrics.lines.isNotEmpty()
+        if (musicMode && lyrics.lines.isEmpty() && player.duration in 1000..3_600_000) {
+            val media = player.mediaMetadata
+            val cast = if (player.mediaItemCount == 1) metadata else ""
+            val ns = "urn:schemas-upnp-org:metadata-1-0/upnp/"
+            val title = media.title?.toString()?.takeIf { it.isNotBlank() } ?: CastTitle.parse(cast)
+            val artist = media.artist?.toString()?.takeIf { it.isNotBlank() }
+                ?: CastTitle.field(cast, ns, "artist")
+            val album = media.albumTitle?.toString() ?: CastTitle.field(cast, ns, "album").orEmpty()
+            if (!title.isNullOrBlank() && !artist.isNullOrBlank()) {
+                val query = LyricQuery(title, artist, album, player.duration / 1000)
+                if (query != onlineLyricQuery) {
+                    onlineLyricQuery = query
+                    lyricStatus = R.string.lyrics_downloading
+                    val generation = lyricGeneration
+                    AppLog.record("TvExoLyrics", "LRCLIB lookup: title=$title artist=$artist duration=${query.seconds}s")
+                    onlineLyrics.load(query) { result, failed ->
+                        main.post {
+                            if (playerActive && musicMode && generation == lyricGeneration &&
+                                key == lyricKey && query == onlineLyricQuery && lyrics.lines.isEmpty()) {
+                                lyrics = result
+                                musicStage.skipAnimation()
+                                lyricStatus = if (failed) R.string.lyrics_failed else R.string.lyrics_unavailable
+                                musicStage.showLyricStatus(if (lyrics.lines.isEmpty()) tr(lyricStatus) else null)
+                                main.removeCallbacks(lyricRefresh)
+                                lyricRefresh.run()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        musicStage.split = musicMode
+        musicStage.showLyricStatus(if (lyrics.lines.isEmpty()) tr(lyricStatus) else null)
         main.removeCallbacks(lyricRefresh)
         lyricRefresh.run()
     }

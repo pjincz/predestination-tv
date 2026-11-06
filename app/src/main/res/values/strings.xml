@@ -137,4 +137,7 @@
     <string name="save_language">"Save language"</string>
     <string name="language_help">"Applies to the player and admin page. Other system languages use English."</string>
     <string name="gain_value">"%1$s: %2$s dB"</string>
+    <string name="lyrics_downloading">Downloading lyrics…</string>
+    <string name="lyrics_unavailable">No lyrics available</string>
+    <string name="lyrics_failed">Could not load lyrics</string>
 </resources>
