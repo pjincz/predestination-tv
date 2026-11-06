@@ -1109,7 +1109,17 @@ internal class TvActivity : Activity(), Renderer {
         }
         artwork.clear()
         if (!M3uPlaylist.matches(uri)) {
-            player.setMediaItem(MediaItem.fromUri(Uri.parse(uri).normalizeScheme()))
+            val subtitles = CastSubtitles.parse(metadata)
+            if (subtitles.isNotEmpty()) {
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setPreferredTextLanguage(null)
+                    .setSelectUndeterminedTextLanguage(true).build()
+            }
+            AppLog.record("TvExoSubtitle", "External subtitles=${subtitles.size}")
+            player.setMediaItem(MediaItem.Builder().setUri(Uri.parse(uri).normalizeScheme())
+                .setSubtitleConfigurations(subtitles).build())
             player.prepare()
             player.play()
             return
