@@ -53,7 +53,19 @@ internal class TvActivity : Activity(), Renderer {
     private var imageError: Int? = null
     private var hasArtwork = false
     private lateinit var musicInfo: MusicInfo
+    private lateinit var musicStage: MusicStage
     private var musicMode = false
+    private var lyricKey: Any? = null
+    private var lyricFormats: List<Format> = emptyList()
+    private var lyrics = EmbeddedLyrics(emptyList())
+    private val lyricRefresh = object : Runnable {
+        override fun run() {
+            if (!playerActive || sleeping || !musicMode ||
+                lyrics.lines.isEmpty()) return
+            musicStage.updateLyrics(lyrics, player.currentPosition)
+            main.postDelayed(this, 200)
+        }
+    }
     private lateinit var osd: TvOsd
     private lateinit var playlistButton: android.widget.Button
     private var playlistDialog: AlertDialog? = null
@@ -124,7 +136,11 @@ internal class TvActivity : Activity(), Renderer {
         val installedAt = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
         if (apkUpdate.pending.lastModified() < installedAt) apkUpdate.pending.delete()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        video = PlayerView(this).apply { useController = false; isFocusable = false }
+        video = PlayerView(this).apply {
+            useController = false
+            isFocusable = false
+            artworkDisplayMode = PlayerView.ARTWORK_DISPLAY_MODE_OFF
+        }
         musicBackground = MusicBackgroundView(this).apply {
             visibility = View.GONE
         }
@@ -139,6 +155,7 @@ internal class TvActivity : Activity(), Renderer {
             if (bitmap == null) artworkView.visibility = View.GONE
         }
         musicInfo = MusicInfo(this)
+        musicStage = MusicStage(this, musicBackground, artworkView)
         castImage = CastArtwork { bitmap -> artworkView.setImageBitmap(bitmap) }
         osd = TvOsd(this).apply {
             toggle = { togglePlayback() }
@@ -187,8 +204,7 @@ internal class TvActivity : Activity(), Renderer {
                 }
             }
             addView(video, FrameLayout.LayoutParams(-1, -1))
-            addView(musicBackground, FrameLayout.LayoutParams(-1, -1))
-            addView(artworkView, FrameLayout.LayoutParams(-1, -1))
+            addView(musicStage, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -1))
             addView(wallPage, FrameLayout.LayoutParams(-1, -1))
             addView(bufferingPanel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
@@ -234,7 +250,8 @@ internal class TvActivity : Activity(), Renderer {
         super.onStart()
         if (playerActive) {
             consumeExternalMedia()
-            main.removeCallbacks(refresh)
+            main.removeCallbacks(lyricRefresh)
+        main.removeCallbacks(refresh)
             refresh.run()
             return
         }
@@ -350,7 +367,11 @@ internal class TvActivity : Activity(), Renderer {
                     }
                 }
 
-                override fun onEvents(player: Player, events: Player.Events) = updateStatus()
+                override fun onEvents(player: Player, events: Player.Events) {
+                    if (events.contains(Player.EVENT_POSITION_DISCONTINUITY) ||
+                        events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) musicStage.skipAnimation()
+                    updateStatus()
+                }
             })
         }
         video.player = player
@@ -409,6 +430,7 @@ internal class TvActivity : Activity(), Renderer {
         osd.hide()
         gainDialog?.dismiss()
         gainDialog = null
+        main.removeCallbacks(lyricRefresh)
         main.removeCallbacks(refresh)
         adminDialog?.dismiss()
         adminDialog = null
@@ -432,6 +454,7 @@ internal class TvActivity : Activity(), Renderer {
         castImage.close()
         artwork.close()
         AudioOnlyMode.restore(this)
+        main.removeCallbacks(lyricRefresh)
         main.removeCallbacks(refresh)
         if (playerActive) {
             cancelPlaylist()
@@ -920,6 +943,24 @@ internal class TvActivity : Activity(), Renderer {
         }
     }
 
+    private fun updateLyrics() {
+        val key = if (musicMode) player.currentMediaItemIndex to player.currentMediaItem else null
+        val formats = if (musicMode) player.currentTracks.groups
+            .filter { it.type == C.TRACK_TYPE_AUDIO }
+            .flatMap { group -> (0 until group.length).filter { group.isTrackSelected(it) }
+                .map { group.getTrackFormat(it) } } else emptyList()
+        if (key != lyricKey || formats != lyricFormats) {
+            lyricKey = key
+            lyricFormats = formats
+            lyrics = EmbeddedLyrics.from(formats)
+            musicStage.updateLyrics(EmbeddedLyrics(emptyList()), 0)
+            if (musicMode) AppLog.record("TvExoLyrics", "Embedded timed lyrics: lines=${lyrics.lines.size}")
+        }
+        musicStage.split = musicMode && lyrics.lines.isNotEmpty()
+        main.removeCallbacks(lyricRefresh)
+        lyricRefresh.run()
+    }
+
     private fun isWaiting() = state() in listOf("STOPPED", "NO_MEDIA_PRESENT")
 
     private fun updateStatus() {
@@ -929,10 +970,10 @@ internal class TvActivity : Activity(), Renderer {
         updateBufferingProgress()
         val waiting = isWaiting()
         if (!waiting && wallPage.active) leaveWallPage()
-        video.visibility = if (waiting || imageState != null) View.INVISIBLE else View.VISIBLE
         val tracks = player.currentTracks
         val audioOnly = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) &&
             !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
+        video.visibility = if (waiting || imageState != null || audioOnly) View.INVISIBLE else View.VISIBLE
         if (imageState == null && !waiting && !loadingPlaylist) {
             artwork.loadMedia(player.currentMediaItemIndex to player.currentMediaItem,
                 player.mediaMetadata.artworkData,
@@ -972,6 +1013,7 @@ internal class TvActivity : Activity(), Renderer {
         }
         osd.updateProgress(position(), duration(), player.isCurrentMediaItemSeekable)
         musicInfo.update(osd.title.text, osd.playbackState.text, position(), duration())
+        updateLyrics()
         if (!waiting) return
         val error = (imageError ?: playlistError)?.let { tr(it) } ?: player.playerError?.errorCodeName
         status.text = listOfNotNull("Predestination TV Exo · ${android.os.Build.MODEL}",
