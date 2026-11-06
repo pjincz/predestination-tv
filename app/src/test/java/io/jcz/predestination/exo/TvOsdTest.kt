@@ -47,6 +47,11 @@ class TvOsdTest {
         assertEquals(250, osd.timeline.progress)
         osd.hide()
         assertEquals(View.GONE, osd.visibility)
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        assertTrue(osd.buttons.getChildAt(0).hasFocus())
+        assertEquals(10, clicked)
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        assertEquals(11, clicked)
         controller.pause().stop().destroy()
     }
 }

@@ -195,6 +195,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
         val confirm = key in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
         if (confirm && event.repeatCount > 0) return true
         if (visibility != VISIBLE) {
+            if (confirm) lastButton = 0
             show(key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT)
             return true
         }
