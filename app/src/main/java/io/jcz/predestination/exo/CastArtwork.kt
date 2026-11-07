@@ -100,7 +100,28 @@ internal class CastArtwork(private val display: (Bitmap?) -> Unit) : AutoCloseab
             while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > maxEdge)
                 options.inSampleSize *= 2
             options.inJustDecodeBounds = false
-            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+            val orientation = try {
+                android.media.ExifInterface(bytes.inputStream()).getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION, 1)
+            } catch (_: java.io.IOException) {
+                return bitmap
+            }
+            val matrix = android.graphics.Matrix()
+            when (orientation) {
+                2 -> matrix.setScale(-1f, 1f)
+                3 -> matrix.setRotate(180f)
+                4 -> matrix.setScale(1f, -1f)
+                5, 7 -> {
+                    matrix.setRotate(if (orientation == 5) 90f else -90f)
+                    matrix.postScale(-1f, 1f)
+                }
+                6 -> matrix.setRotate(90f)
+                8 -> matrix.setRotate(-90f)
+                else -> return bitmap
+            }
+            return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, false)
+                .also { if (it !== bitmap) bitmap.recycle() }
         }
 
         private fun download(address: String, maxEdge: Int, maxBytes: Int): Bitmap? {
