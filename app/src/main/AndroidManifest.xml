@@ -18,7 +18,7 @@
         android:theme="@style/PlayerTheme">
         <activity android:name=".TvActivity" android:exported="true"
             android:configChanges="locale|layoutDirection"
-            android:screenOrientation="landscape" android:launchMode="singleTop">
+            android:screenOrientation="sensorLandscape" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
