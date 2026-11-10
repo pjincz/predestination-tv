@@ -129,6 +129,12 @@ internal object Protocol {
             throw UpnpError(402, "Invalid Channel")
     }
 
+    private fun stateName(service: String, key: String): String = when {
+        service == RC && key in listOf("Volume", "Mute") -> key
+        service == RC && key == "Id" -> "A_ARG_TYPE_InstanceID"
+        else -> "A_ARG_TYPE_$key"
+    }
+
     fun scpd(service: String): String {
         val methods = actions.getValue(service)
         val variables = methods.values.flatMap { it.split(' ') }.map { it.split(':')[2] }.toSet()
@@ -138,7 +144,7 @@ internal object Protocol {
                 "<action><name>$name</name><argumentList>" + args.split(' ').joinToString("") {
                     val (arg, direction, state) = it.split(':')
                     "<argument><name>$arg</name><direction>${if (direction == "i") "in" else "out"}</direction>" +
-                        "<relatedStateVariable>A_ARG_TYPE_$state</relatedStateVariable></argument>"
+                        "<relatedStateVariable>${stateName(service, state)}</relatedStateVariable></argument>"
                 } + "</argumentList></action>"
             } + "</actionList><serviceStateTable>" + variables.joinToString("") {
                 val type = when (it) {
@@ -148,7 +154,8 @@ internal object Protocol {
                     "Count", "ConnectionId" -> "i4"
                     else -> "string"
                 }
-                "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_$it</name><dataType>$type</dataType>" +
+                "<stateVariable sendEvents=\"no\"><name>${stateName(service, it)}</name><dataType>$type</dataType>" +
+                    (if (service == RC && it == "Channel") "<allowedValueList><allowedValue>Master</allowedValue></allowedValueList>" else "") +
                     (if (it == "Volume") "<allowedValueRange><minimum>0</minimum><maximum>100</maximum><step>1</step></allowedValueRange>" else "") +
                     "</stateVariable>"
             } + (if (service == CM) {

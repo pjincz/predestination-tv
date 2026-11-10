@@ -4,6 +4,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProtocolTest {
+    @Test fun renderingDescriptionExposesMasterVolumeRange() {
+        val document = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+            .newDocumentBuilder().parse(Protocol.scpd(RC).byteInputStream())
+        val xpath = javax.xml.xpath.XPathFactory.newInstance().newXPath()
+        val volume = "//stateVariable[name='Volume']"
+        assertEquals("ui2", xpath.evaluate("$volume/dataType", document))
+        for ((field, value) in mapOf("minimum" to "0", "maximum" to "100", "step" to "1")) {
+            assertEquals(value, xpath.evaluate("$volume/allowedValueRange/$field", document))
+        }
+        for (argument in listOf("CurrentVolume", "DesiredVolume")) {
+            assertEquals("Volume", xpath.evaluate("//argument[name='$argument']/relatedStateVariable", document))
+        }
+    }
+
     @Test fun acceptsBilibiliTransportExtensionsWithoutRelaxingRequiredArguments() {
         val body = Protocol.envelope("<u:SetAVTransportURI xmlns:u=\"$AV\"><InstanceID>0</InstanceID>" +
             "<CurrentURI>https://example.org/video.mp4</CurrentURI><CurrentURIMetaData/>" +
