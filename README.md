@@ -50,6 +50,10 @@ Configure `ANDROID_HOME` or a local `local.properties` file, then run these comm
 # ARM64, for phones, tablets, and TVs that support this architecture
 .\gradlew.bat assembleDebug -PtargetAbi=arm64-v8a
 
+# x86 / x86_64
+.\gradlew.bat assembleDebug -PtargetAbi=x86
+.\gradlew.bat assembleDebug -PtargetAbi=x86_64
+
 # Unit tests and static analysis
 .\gradlew.bat testDebugUnitTest lintDebug
 ```

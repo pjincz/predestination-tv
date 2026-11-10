@@ -14,6 +14,10 @@ Build a signed release from the repository root:
 ```powershell
 .\gradlew.bat assembleRelease -PtargetAbi=armeabi-v7a
 .\gradlew.bat assembleRelease -PtargetAbi=arm64-v8a
+
+# x86 / x86_64
+.\gradlew.bat assembleRelease -PtargetAbi=x86
+.\gradlew.bat assembleRelease -PtargetAbi=x86_64
 ```
 
 Both commands write `app/build/outputs/apk/release/app-release.apk`; copy each output before building the other architecture.

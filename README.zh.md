@@ -47,6 +47,10 @@ Wall Page 用于在空闲时展示网页看板、时钟或其他信息页面。
 # ARM64，适用于支持该架构的手机、平板和电视
 .\gradlew.bat assembleDebug -PtargetAbi=arm64-v8a
 
+# x86 / x86_64
+.\gradlew.bat assembleDebug -PtargetAbi=x86
+.\gradlew.bat assembleDebug -PtargetAbi=x86_64
+
 # 单元测试和静态检查
 .\gradlew.bat testDebugUnitTest lintDebug
 ```

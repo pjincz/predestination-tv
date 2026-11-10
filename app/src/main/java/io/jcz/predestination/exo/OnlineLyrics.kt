@@ -37,7 +37,7 @@ internal class OnlineLyrics(directory: java.io.File) : AutoCloseable {
         try {
             connection.connectTimeout = 8000
             connection.readTimeout = 8000
-            connection.setRequestProperty("User-Agent", "Predestination-TV-Exo/0.9.1")
+            connection.setRequestProperty("User-Agent", "Predestination-TV-Exo/0.9.2")
             val code = connection.responseCode
             AppLog.record("TvExoLyrics", "LRCLIB response=$code")
             if (code == 404) return EmbeddedLyrics(emptyList())
