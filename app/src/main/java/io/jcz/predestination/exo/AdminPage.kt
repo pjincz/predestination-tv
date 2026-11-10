@@ -22,7 +22,7 @@ internal class AdminPage(private val context: Context) {
     private val activityManager = context.getSystemService(ActivityManager::class.java)
     private val appVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
     internal data class Approval(val id: String, val code: String, val peer: String)
-    private data class Pending(val approval: Approval, val expires: Long, var approved: Boolean? = null)
+    private data class Pending(val approval: Approval, val expires: Long, var approved: Boolean? = null, var sessionSeconds: Int = SESSION_SECONDS)
 
     private val random = SecureRandom()
     private var pending: Pending? = null
@@ -49,15 +49,34 @@ internal class AdminPage(private val context: Context) {
     }?.approval
 
     @Synchronized
-    fun resolve(approval: Approval, approved: Boolean) {
-        if (awaitingApproval() == approval) pending?.approved = approved
+    fun resolve(approval: Approval, approved: Boolean, remember: Boolean = false) {
+        val current = pending ?: return
+        if (awaitingApproval() != approval) return
+        current.approved = approved
+        if (remember && approved) current.sessionSeconds = 30 * 24 * 60 * 60
+        if (remember && !approved) {
+            preferences.edit().putLong("denied:${approval.peer}", System.currentTimeMillis() + 86_400_000L).apply()
+        }
+    }
+
+    @Synchronized
+    fun ignore(approval: Approval) {
+        if (awaitingApproval() == approval) pending = null
+    }
+
+    private fun blocked(request: HttpRequest): Boolean {
+        val key = "denied:${request.peer.hostAddress}"
+        val until = preferences.getLong(key, 0)
+        if (until > System.currentTimeMillis()) return true
+        if (until != 0L) preferences.edit().remove(key).apply()
+        return false
     }
 
     fun upload(request: HttpRequest, baseUrl: String, input: java.io.InputStream, size: Int): HttpResponse {
         if (request.method != "POST") return HttpResponse(405)
         val authorized = synchronized(this) {
             request.headers["host"] == baseUrl.removePrefix("http://") &&
-                request.headers["origin"] == baseUrl && authenticated(request)
+                request.headers["origin"] == baseUrl && !blocked(request) && authenticated(request)
         }
         if (!authorized) return HttpResponse(403, context.tr(R.string.sign_in_again))
         if (request.headers["content-type"] != "application/vnd.android.package-archive")
@@ -71,6 +90,7 @@ internal class AdminPage(private val context: Context) {
     @Synchronized
     fun handle(request: HttpRequest, baseUrl: String): HttpResponse {
         if (request.headers["host"] != baseUrl.removePrefix("http://")) return page(403, context.tr(R.string.invalid_address))
+        if (blocked(request)) return page(403, context.tr(R.string.admin_access_denied)).withCookie(APPROVAL_COOKIE, "", 0)
         if (request.path == "/admin" && request.method == "POST") return saveSettings(request, baseUrl)
         if (request.method != "GET") return page(405, context.tr(R.string.method_unsupported))
         if (request.headers["sec-fetch-site"] == "cross-site") return page(403, context.tr(R.string.open_admin_directly))
@@ -95,11 +115,11 @@ internal class AdminPage(private val context: Context) {
             }
             if (current.approved == true) {
                 val session = token()
-                if (!saveSession(session)) {
+                if (!saveSession(session, current.sessionSeconds)) {
                     return page(503, context.tr(R.string.approval_save_error))
                 }
                 pending = null
-                return dashboard().withCookie(SESSION_COOKIE, session, SESSION_SECONDS)
+                return dashboard().withCookie(SESSION_COOKIE, session, current.sessionSeconds)
             }
             return waiting(current.approval)
         }
@@ -112,14 +132,14 @@ internal class AdminPage(private val context: Context) {
         return waiting(approval).withCookie(APPROVAL_COOKIE, approval.id, APPROVAL_SECONDS)
     }
 
-    private fun saveSession(session: String): Boolean {
+    private fun saveSession(session: String, seconds: Int): Boolean {
         val now = System.currentTimeMillis()
         val editor = preferences.edit()
         for ((key, value) in preferences.all) {
             if (key.startsWith("session:") && value is Long && value <= now) editor.remove(key)
         }
         return editor
-            .putLong("session:${sessionDigest(session)}", now + SESSION_SECONDS * 1000L)
+            .putLong("session:${sessionDigest(session)}", now + seconds * 1000L)
             .commit()
     }
 

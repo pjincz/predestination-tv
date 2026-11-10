@@ -137,4 +137,6 @@
     <string name="lyrics_downloading">正在下载歌词…</string>
     <string name="lyrics_unavailable">暂无歌词</string>
     <string name="lyrics_failed">歌词加载失败</string>
+    <string name="remember_device">记住设备</string>
+    <string name="admin_access_denied">访问已被拒绝</string>
 </resources>

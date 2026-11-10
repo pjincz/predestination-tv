@@ -897,12 +897,18 @@ internal class TvActivity : Activity(), Renderer {
         shownApproval = approval
         if (approval == null) return
 
+        val remember = android.widget.CheckBox(this).apply { text = tr(R.string.remember_device) }
         adminDialog = AlertDialog.Builder(this)
+            .setView(FrameLayout(this).apply {
+                val inset = (24 * resources.displayMetrics.density + 0.5f).toInt()
+                setPaddingRelative(inset, 0, inset, 0)
+                addView(remember)
+            })
             .setTitle(tr(R.string.admin_approve_title))
             .setMessage(tr(R.string.admin_approve_message, approval.peer, approval.code))
-            .setPositiveButton(tr(R.string.allow)) { _, _ -> page.resolve(approval, true) }
-            .setNegativeButton(tr(R.string.deny)) { _, _ -> page.resolve(approval, false) }
-            .setOnCancelListener { page.resolve(approval, false) }
+            .setPositiveButton(tr(R.string.allow)) { _, _ -> page.resolve(approval, true, remember.isChecked) }
+            .setNegativeButton(tr(R.string.deny)) { _, _ -> page.resolve(approval, false, remember.isChecked) }
+            .setOnCancelListener { page.ignore(approval) }
             .show()
             .also {
                 trackDialogBack(it)

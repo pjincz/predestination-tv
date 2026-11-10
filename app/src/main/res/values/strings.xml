@@ -140,4 +140,6 @@
     <string name="lyrics_downloading">Downloading lyrics…</string>
     <string name="lyrics_unavailable">No lyrics available</string>
     <string name="lyrics_failed">Could not load lyrics</string>
+    <string name="remember_device">Remember device</string>
+    <string name="admin_access_denied">Access denied</string>
 </resources>
