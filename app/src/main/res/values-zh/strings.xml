@@ -139,4 +139,8 @@
     <string name="lyrics_failed">歌词加载失败</string>
     <string name="remember_device">记住设备</string>
     <string name="admin_access_denied">访问已被拒绝</string>
+    <string name='github_update_available'>GitHub 上有新版本 %1$s，是否下载更新？</string>
+    <string name='github_download'>下载更新</string>
+    <string name='github_download_failed'>下载失败</string>
+    <string name='github_skip_version'>跳过此版本</string>
 </resources>

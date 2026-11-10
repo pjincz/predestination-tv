@@ -142,4 +142,8 @@
     <string name="lyrics_failed">Could not load lyrics</string>
     <string name="remember_device">Remember device</string>
     <string name="admin_access_denied">Access denied</string>
+    <string name='github_update_available'>Version %1$s is available on GitHub. Download the update?</string>
+    <string name='github_download'>Download update</string>
+    <string name='github_download_failed'>Download failed</string>
+    <string name='github_skip_version'>Skip this version</string>
 </resources>

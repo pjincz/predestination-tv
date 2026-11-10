@@ -521,6 +521,57 @@ internal class TvActivity : Activity(), Renderer {
         if (playerActive) updateStatus()
     }
 
+    private var availableRelease: GithubUpdates.Release? = null
+    private var releaseBusy = false
+    private val releasePrefs by lazy { getSharedPreferences("github_updates", MODE_PRIVATE) }
+
+    private fun checkRelease() {
+        if (releaseBusy || apkUpdate.pending.exists()) return
+        val release = availableRelease
+        if (release != null) {
+            availableRelease = null
+            updateDialog = AlertDialog.Builder(this)
+                .setMessage(tr(R.string.github_update_available, release.version))
+                .setNeutralButton(tr(R.string.github_skip_version)) { _, _ ->
+                    releasePrefs.edit().putString("skipped_version", release.version).apply()
+                }
+                .setNegativeButton(tr(R.string.cancel), null)
+                .setPositiveButton(tr(R.string.github_download)) { _, _ ->
+                    releaseBusy = true
+                    playlistExecutor.execute {
+                        val result = runCatching { GithubUpdates.download(release, apkUpdate) }
+                        main.post {
+                            releaseBusy = false
+                            val error = result.exceptionOrNull()?.toString()
+                                ?: result.getOrNull()?.takeIf { it.status != 200 }?.body
+                            if (error != null && !isDestroyed) {
+                                availableRelease = release
+                                AppLog.record("TvExoUpdate", "GitHub download: $error")
+                                Toast.makeText(this, tr(R.string.github_download_failed), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }.show()
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now < releasePrefs.getLong("next_check", 0)) return
+        releaseBusy = true
+        val installed = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
+        playlistExecutor.execute {
+            val result = runCatching { GithubUpdates.latest(installed) }
+            main.post {
+                releaseBusy = false
+                availableRelease = result.getOrNull()?.takeUnless {
+                    it.version == releasePrefs.getString("skipped_version", null)
+                }
+                val hours = if (result.isSuccess) 24 else 1
+                releasePrefs.edit().putLong("next_check", now + hours * 3600000L).apply()
+                result.exceptionOrNull()?.let { AppLog.record("TvExoUpdate", "GitHub check: $it") }
+            }
+        }
+    }
+
     private fun checkIdleScreen() {
         val config = wallSettings.read()
         if (config != wallConfig) {
@@ -532,6 +583,7 @@ internal class TvActivity : Activity(), Renderer {
             hasWindowFocus() && adminDialog?.isShowing != true && updateDialog?.isShowing != true &&
             gainDialog?.isShowing != true && exitDialog?.isShowing != true && isWaiting()
         val now = android.os.SystemClock.elapsedRealtime()
+        if (idle && !wallPage.active) checkRelease()
         if (config.url.isNotEmpty()) {
             idleScreenTimer.reset()
             val due = wallTimer.update(now, idle && !wallPage.active)

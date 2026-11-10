@@ -39,7 +39,10 @@ internal class ApkUpdate(private val context: Context) {
                 candidate.signatures?.toSet() != installed.signatures?.toSet()) {
                 return HttpResponse(400, context.tr(R.string.apk_mismatch))
             }
-            if (!temporary.renameTo(pending)) return HttpResponse(503, context.tr(R.string.update_save_error))
+            synchronized(ApkUpdate::class.java) {
+                if (pending.exists()) return HttpResponse(409, context.tr(R.string.update_pending))
+                if (!temporary.renameTo(pending)) return HttpResponse(503, context.tr(R.string.update_save_error))
+            }
             return HttpResponse(body = context.tr(R.string.update_received))
         } finally {
             temporary.delete()
