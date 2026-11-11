@@ -55,7 +55,10 @@ internal class TvActivity : Activity(), Renderer {
     private lateinit var musicInfo: MusicInfo
     private lateinit var musicStage: MusicStage
     private var musicMode = false
-    private val onlineLyrics by lazy { OnlineLyrics(java.io.File(filesDir, "lyrics-v1")) }
+    private val onlineLyrics by lazy {
+        val version = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
+        OnlineLyrics(java.io.File(filesDir, "lyrics-v1"), version)
+    }
     private var onlineLyricQuery: LyricQuery? = null
     private var lyricGeneration = 0
     private var lyricStatus = R.string.lyrics_unavailable
@@ -163,6 +166,7 @@ internal class TvActivity : Activity(), Renderer {
         osd = TvOsd(this).apply {
             toggle = { togglePlayback() }
             seek = { seconds -> seekFromOsd(position() + seconds) }
+            skip = ::skipFromOsd
             seekFraction = { fraction -> seekFromOsd(duration() * fraction) }
             addButton(R.string.play_pause) { togglePlayback() }
             addButton(R.string.previous) { skipFromOsd(false) }

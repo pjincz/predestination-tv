@@ -8,7 +8,7 @@ if (releasePropertiesFile.isFile()) {
     releasePropertiesFile.withInputStream { releaseProperties.load(it) }
 }
 
-def releaseVersion = '0.9.2'
+def releaseVersion = '0.9.3'
 def (major, minor, patch) = releaseVersion.tokenize('.').collect { it.toInteger() }
 if (minor >= 100 || patch >= 100) {
     throw new GradleException('Minor and patch versions must each fit in two digits')

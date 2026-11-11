@@ -84,6 +84,7 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
     }
     val buttons = LinearLayout(context).apply { orientation = HORIZONTAL }
     var toggle: () -> Unit = {}
+    var skip: (Boolean) -> Unit = {}
     var seek: (Int) -> Unit = {}
     var seekFraction: (Double) -> Unit = {}
     private val handler = Handler(Looper.getMainLooper())
@@ -155,12 +156,12 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
         }
     }
 
-    fun show(seekFocus: Boolean = false) {
+    fun show() {
         val wasHidden = visibility != VISIBLE
         visibility = VISIBLE
         if (wasHidden) visibilityChanged()
-        if (seekFocus) timeline.requestFocus()
-        else if (wasHidden || !hasFocus()) {
+
+        if (wasHidden || !hasFocus()) {
             val button = buttons.getChildAt(lastButton)
             if (button?.visibility == VISIBLE) button.requestFocus()
             else buttons.getChildAt(0)?.requestFocus()
@@ -195,8 +196,18 @@ internal class TvOsd(context: Context) : LinearLayout(context) {
         val confirm = key in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
         if (confirm && event.repeatCount > 0) return true
         if (visibility != VISIBLE) {
+            when (key) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    seek(if (key == KeyEvent.KEYCODE_DPAD_LEFT) -10 else 10)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (event.repeatCount == 0) skip(key == KeyEvent.KEYCODE_DPAD_DOWN)
+                    return true
+                }
+            }
             if (confirm) lastButton = 0
-            show(key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT)
+            show()
             return true
         }
         touch()

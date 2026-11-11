@@ -9,7 +9,8 @@ import kotlin.math.abs
 
 internal data class LyricQuery(val title: String, val artist: String, val album: String, val seconds: Long)
 
-internal class OnlineLyrics(directory: java.io.File) : AutoCloseable {
+internal class OnlineLyrics(directory: java.io.File, version: String) : AutoCloseable {
+    private val userAgent = "Predestination-TV-Exo/$version"
     private val worker = Executors.newSingleThreadExecutor()
     private val cache = LyricsDiskCache(directory)
 
@@ -37,7 +38,7 @@ internal class OnlineLyrics(directory: java.io.File) : AutoCloseable {
         try {
             connection.connectTimeout = 8000
             connection.readTimeout = 8000
-            connection.setRequestProperty("User-Agent", "Predestination-TV-Exo/0.9.2")
+            connection.setRequestProperty("User-Agent", userAgent)
             val code = connection.responseCode
             AppLog.record("TvExoLyrics", "LRCLIB response=$code")
             if (code == 404) return EmbeddedLyrics(emptyList())
